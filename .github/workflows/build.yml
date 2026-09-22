@@ -35,12 +35,12 @@ jobs:
           Write-Host "Qt 6.8.3 architectures: $archs"
           Write-Host "::notice title=Qt 6.8.3 architectures::$archs"
 
-          $out = & python -m aqt install-qt windows desktop 6.8.3 win64_msvc2019_64 --outputdir "$env:RUNNER_TEMP\Qt" 2>&1 | Out-String
+          $out = & python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --outputdir "$env:RUNNER_TEMP\Qt" 2>&1 | Out-String
           Write-Host $out
           Add-Content -Path qt-install.log -Value $out
           if ($LASTEXITCODE -ne 0) { Write-Host "::error title=aqt install-qt failed::$((($out -split '\r?\n') | Where-Object { $_ } | Select-Object -Last 8) -join ' | ')"; exit 1 }
 
-          "Qt6_DIR=$env:RUNNER_TEMP\Qt\6.8.3\msvc2019_64" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii
+          "Qt6_DIR=$env:RUNNER_TEMP\Qt\6.8.3\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii
 
       - name: Configure
         shell: pwsh
