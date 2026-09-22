@@ -3,6 +3,6 @@
     "Id": "org.openrgb.wake-plugin",
     "Name": "OpenRGB Wake Plugin",
     "Description": "Re-applies device lighting when a wireless device wakes or reconnects",
-    "VersionStr": "1.1.0",
+    "VersionStr": "1.2.0",
     "Url": "https://github.com/Tyoman1/openrgb-wake-plugin"
 }

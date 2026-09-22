@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 #include "OpenRGBPluginInterface.h"
 #include "ResourceManagerCallback.h"
@@ -46,62 +45,28 @@ public:
 
     /* Called by SettingsWidget */
     void                SettingsChanged();
-    void                TakeSnapshotNow();
 
 private:
-    struct ModeSnap
-    {
-        unsigned int            speed       = 0;
-        unsigned int            brightness  = 0;
-        unsigned int            direction   = 0;
-        unsigned int            color_mode  = 0;
-        std::vector<RGBColor>   colors;
-    };
-
-    struct ZoneSnap
-    {
-        int                     active_mode = -1;
-        std::vector<RGBColor>   colors;
-        std::vector<ModeSnap>   modes;
-    };
-
-    struct DeviceSnap
-    {
-        std::string             name;
-        std::string             location;
-        std::string             description;
-        int                     active_mode    = 0;
-        bool                    per_zone_modes = false;
-        std::vector<ModeSnap>   modes;
-        std::vector<ZoneSnap>   zones;
-        std::vector<RGBColor>   led_colors;
-    };
-
     bool                MatchesTarget(RGBControllerInterface* ctrl);
-    bool                SnapshotController(RGBControllerInterface* ctrl, DeviceSnap& snap);
-    bool                RestoreController(RGBControllerInterface* ctrl, const DeviceSnap& snap);
-    DeviceSnap*         FindSnapshotFor(RGBControllerInterface* ctrl);
-    void                SnapshotTargets();
-    void                ScheduleReapply(const char* reason, int delay_ms);
-    void                ReapplyTargets(const char* reason);
+    bool                ApplyTargets(const char* reason);
+    void                ApplyStartup();
     void                LoadSettings();
     void                SaveSettings();
     void                Log(const char* msg, unsigned int level = 2);
 
-    OpenRGBPluginAPIInterface*  api_                  = nullptr;
-    SettingsWidget*             widget_               = nullptr;
-    PowerWatcher*               power_watcher_        = nullptr;
-    MouseActivityWatcher*       mouse_watcher_        = nullptr;
+    OpenRGBPluginAPIInterface*  api_                     = nullptr;
+    SettingsWidget*             widget_                  = nullptr;
+    PowerWatcher*               power_watcher_           = nullptr;
+    MouseActivityWatcher*       mouse_watcher_           = nullptr;
 
-    std::string                 target_key_           = "DeathAdder";
-    bool                        reapply_on_change_    = true;
-    bool                        reapply_on_wake_      = true;
+    std::string                 target_key_              = "DeathAdder";
+    bool                        reapply_on_wake_         = true;
     bool                        activity_detect_enabled_ = true;
-    int                         idle_resume_sec_      = 60;
-    bool                        log_enabled_          = true;
+    int                         idle_resume_sec_         = 60;
+    bool                        log_enabled_             = true;
 
-    bool                        reapply_pending_      = false;
-    bool                        last_restore_ok_      = true;
-
-    std::vector<DeviceSnap>     snapshots_;
+    /* True when the last re-apply reached at least one target device */
+    bool                        last_restore_ok_         = true;
+    /* Remaining retries when the mouse has not been detected yet at startup */
+    int                         startup_retries_left_    = 5;
 };
