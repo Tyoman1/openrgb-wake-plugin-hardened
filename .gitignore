@@ -1,0 +1,14 @@
+# Build output
+build/
+out/
+cmake-build-*/
+
+# Qt Creator / VS
+*.user
+.vs/
+.vscode/
+
+# Artifacts
+*.zip
+*.dll
+*.exe
