@@ -71,13 +71,14 @@ live in OpenRGB's settings manager under the `OpenRGBWakePlugin` key.
 ## Toolchain decision: CI build (GitHub Actions)
 
 Installed OpenRGB is Qt 6.8.3 MSVC build → a plugin DLL must match that ABI:
-**MSVC + Qt 6.8.x (msvc2019_64)**. The machine has no Qt / MSVC / cmake /
+**MSVC + Qt 6.8.x (win64_msvc2022_64)**. The machine has no Qt / MSVC / cmake /
 vcpkg, so the plugin is built in the cloud:
 
 `.github/workflows/build.yml` — on every push to `main`:
-`windows-latest` + Python 3.12 (pinned) + Qt 6.8.3 (via `aqtinstall`) + CMake
-(VS 2022 generator) → produces `build/Release/OpenRGBWakePlugin.dll` → uploaded
-as a GitHub Actions artifact.
+`windows-latest` + Python 3.12 (pinned) + Qt 6.8.3 (via `aqtinstall`,
+`win64_msvc2022_64` — the only MSVC arch Qt 6.8 ships) + CMake (auto-detects
+the installed Visual Studio generator) → produces
+`build/Release/OpenRGBWakePlugin.dll` → uploaded as a GitHub Actions artifact.
 
 Local structure:
 
