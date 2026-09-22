@@ -13,13 +13,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Qt 6.8.3 MSVC build - must match the Qt OpenRGB 1.0 ships with
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+      # Pin Python: GitHub runners now default to Python 3.14, which the
+      # Qt installer tool does not support yet
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          version: '6.8.3'
-          arch: 'win64_msvc2019_64'
-          cache: true
+          python-version: '3.12'
+
+      # Qt 6.8.3 MSVC build - must match the Qt OpenRGB 1.0 ships with
+      - name: Install Qt 6.8.3 (MSVC)
+        shell: pwsh
+        run: |
+          pip install --disable-pip-version-check aqtinstall==3.1.17
+          python -m aqt install-qt windows desktop 6.8.3 win64_msvc2019_64 --outputdir "$env:RUNNER_TEMP\Qt"
+          "Qt6_DIR=$env:RUNNER_TEMP\Qt\6.8.3\msvc2019_64" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii
+          Get-ChildItem "$env:RUNNER_TEMP\Qt\6.8.3\msvc2019_64" | Select-Object -First 3 Name
 
       - name: Configure
         shell: pwsh

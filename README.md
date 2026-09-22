@@ -75,9 +75,9 @@ Installed OpenRGB is Qt 6.8.3 MSVC build → a plugin DLL must match that ABI:
 vcpkg, so the plugin is built in the cloud:
 
 `.github/workflows/build.yml` — on every push to `main`:
-`windows-latest` + Qt 6.8.3 (`jurplel/install-qt-action`) + CMake (VS 2022
-generator) → produces `build/Release/OpenRGBWakePlugin.dll` → uploaded as a
-GitHub Actions artifact.
+`windows-latest` + Python 3.12 (pinned) + Qt 6.8.3 (via `aqtinstall`) + CMake
+(VS 2022 generator) → produces `build/Release/OpenRGBWakePlugin.dll` → uploaded
+as a GitHub Actions artifact.
 
 Local structure:
 
