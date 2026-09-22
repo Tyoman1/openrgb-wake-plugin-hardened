@@ -24,9 +24,14 @@ without Razer Synapse.
    hotplug event fires and 1.0 never re-applies. Synapse works because Razer's
    own driver gets a wake notification from the device itself. This is the
    exact open issue [#3187].
-3. `tools/watch-mouse-sleep.ps1` will tell us whether the device actually drops
+3. `tools/watch-mouse-sleep.ps1` tells us whether the device actually drops
    from Windows on sleep (case A) or stays enumerated (case B).
    That decides the plugin's detection trigger.
+
+**Measured 2026-09-22:** during ~5 min of idle + wake the mouse stayed
+enumerated the whole time (no `ABSENT` entries in `tools/mouse-presence.log`).
+→ case B: the plugin is designed around periodic re-apply (poll), with
+device-change and PC-wake triggers as fast paths.
 
 ## Plugin design (OpenRGB Plugin API v5, in-process, Qt 6)
 
@@ -43,42 +48,51 @@ What the plugin has available (from `OpenRGBPluginInterface.h`,
 | Force a rescan | `RescanDevices()` |
 | Timer poll (Qt) | own `QTimer` inside plugin widget/object |
 
-### Detection layers (all three, whichever fires first)
+### Detection layers (implemented, first one that fires wins)
 
-1. **Device-list hook** — on `DEVICE_LIST_UPDATED`/`DETECTION_COMPLETE`, diff
-   controllers, and if the target mouse appeared → re-apply after a short delay
-   (handles case A and PC boot).
-2. **Power hook** — native Windows power events (WM_POWERBROADCAST resume) via
+1. **Poll** (configurable interval, default 20 s) — primary layer for case B:
+   re-apply the saved snapshot to the matched device. Trade-off: for animated
+   modes the animation restarts on each tick; lower the frequency or disable
+   the layer to taste.
+2. **Device-list hook** — on `DEVICE_LIST_UPDATED`/`DETECTION_COMPLETE`,
+   re-apply after a short delay (handles case A and PC boot / USB re-enumeration).
+3. **Power hook** — native Windows power events (WM_POWERBROADCAST resume) via
    a `QAbstractNativeEventFilter` installed from the plugin → re-apply after
    resume.
-3. **Poll** (configurable interval) — for case B: re-check the stored
-   "last applied" color/mode and re-send when the device is believed to have
-   been asleep (interval + hysteresis configurable; a "force re-apply" toggle
-   as last resort).
 
-Re-apply = iterate matched controllers, restore the last applied
-mode/colors (snapshot kept from the last successful apply), call
-`UpdateMode()` / `UpdateLEDs()`.
+Re-apply = iterate matched controllers, restore the saved mode/colors snapshot
+(global modes + per-zone modes + per-LED colors), call `UpdateMode()` /
+`UpdateLEDs()` / `UpdateZoneMode()` / `UpdateZoneLEDs()`.
 
-## Toolchain decision (still open)
+Snapshot is taken at plugin load, after profile load, and manually via the
+"Запомнить текущую подсветку" button in the plugin's settings tab. Settings
+live in OpenRGB's settings manager under the `OpenRGBWakePlugin` key.
+
+## Toolchain decision: CI build (GitHub Actions)
 
 Installed OpenRGB is Qt 6.8.3 MSVC build → a plugin DLL must match that ABI:
-**MSVC + Qt 6.8.x (msvc2019_64)**. Current machine has no Qt / MSVC / cmake /
-vcpkg, so options are:
+**MSVC + Qt 6.8.x (msvc2019_64)**. The machine has no Qt / MSVC / cmake /
+vcpkg, so the plugin is built in the cloud:
 
-- **A. Local toolchain**: VS Build Tools (MSVC) + Qt 6.8.3 via aqtinstall +
-  cmake. One-time ~3–6 GB install. Fastest iteration.
-- **B. CI build**: push plugin source to GitLab/GitHub, pipeline produces the
-  Windows plugin zip (no local install). Slower iteration, zero install.
+`.github/workflows/build.yml` — on every push to `main`:
+`windows-latest` + Qt 6.8.3 (`jurplel/install-qt-action`) + CMake (VS 2022
+generator) → produces `build/Release/OpenRGBWakePlugin.dll` → uploaded as a
+GitHub Actions artifact.
+
+Local structure:
+
+- `src/` — plugin implementation (WakePlugin, SettingsWidget, PowerWatcher)
+- `vendor/OpenRGBPluginSDK/` — plugin API v5 headers pinned from OpenRGB master
+- `tools/watch-mouse-sleep.ps1` — device presence logger
 
 ## Steps
 
-- [ ] Fix duplicate instance (service vs `--startminimized` GUI)
-- [ ] Run `tools/watch-mouse-sleep.ps1`, let mouse sleep, read log → decide A/B
-- [ ] Decide toolchain route (local vs CI)
-- [ ] Scaffold plugin (Qt 6.8.3 + plugin API v5 headers)
-- [ ] Implement detection + re-apply, settings tab
-- [ ] Build, install into OpenRGB (`%APPDATA%`/OpenRGB plugins dir), test sleep/wake
+- [x] Research plugin API v5 + OpenRGB 1.0 behavior (issues #3842, #3187)
+- [x] Run `tools/watch-mouse-sleep.ps1`, read log → case B (device stays)
+- [x] Scaffold plugin (Qt 6.8.3 + plugin API v5 headers), push to GitHub
+- [x] Implement detection + re-apply, settings tab
+- [ ] CI build green → download DLL from Actions artifact
+- [ ] Install into OpenRGB plugins dir, restart, test sleep/wake
 
 [#3842]: https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/3842
 [#3187]: https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/3187

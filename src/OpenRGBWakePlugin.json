@@ -1,0 +1,5 @@
+{
+    "name": "OpenRGB Wake Plugin",
+    "description": "Re-applies device lighting when a wireless device wakes or reconnects",
+    "version": "1.0.0"
+}

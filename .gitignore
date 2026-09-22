@@ -12,3 +12,6 @@ cmake-build-*/
 *.zip
 *.dll
 *.exe
+
+# Logs
+*.log

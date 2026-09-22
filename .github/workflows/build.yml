@@ -1,0 +1,36 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Qt 6.8.3 MSVC build - must match the Qt OpenRGB 1.0 ships with
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: 'win64_msvc2019_64'
+          cache: true
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Upload plugin DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenRGBWakePlugin
+          path: build/Release/OpenRGBWakePlugin.dll
