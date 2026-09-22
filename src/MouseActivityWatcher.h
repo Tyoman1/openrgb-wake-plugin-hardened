@@ -26,6 +26,13 @@ signals:
     void mouseResumed();
 
 private:
+    /* OS low-level mouse hook callback (HHOOK proc). Declared with the
+       Windows calling-convention types spelled out so that this header
+       does not have to include <windows.h>. */
+    static long long __stdcall LowLevelMouseProc(int nCode,
+                                                 unsigned long long wParam,
+                                                 long long lParam);
+
     void OnMouseEvent();
 
     static MouseActivityWatcher* active_instance;

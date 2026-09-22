@@ -13,12 +13,12 @@
 MouseActivityWatcher* MouseActivityWatcher::active_instance = nullptr;
 void*                 MouseActivityWatcher::active_hook     = nullptr;
 
-static LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK MouseActivityWatcher::LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    if ((nCode == HC_ACTION) && (MouseActivityWatcher::active_instance != nullptr))
+    if ((nCode == HC_ACTION) && (active_instance != nullptr))
     {
         /* Minimal work: just record the event and maybe schedule a signal. */
-        MouseActivityWatcher::active_instance->OnMouseEvent();
+        active_instance->OnMouseEvent();
     }
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
