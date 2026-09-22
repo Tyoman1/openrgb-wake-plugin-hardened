@@ -8,9 +8,9 @@
 #include "RGBControllerInterface.h"
 
 class QMenu;
-class QTimer;
 class QWidget;
 
+class MouseActivityWatcher;
 class PowerWatcher;
 class SettingsWidget;
 
@@ -84,24 +84,24 @@ private:
     void                SnapshotTargets();
     void                ScheduleReapply(const char* reason, int delay_ms);
     void                ReapplyTargets(const char* reason);
-    void                UpdatePollTimer();
     void                LoadSettings();
     void                SaveSettings();
     void                Log(const char* msg, unsigned int level = 2);
 
-    OpenRGBPluginAPIInterface*  api_               = nullptr;
-    SettingsWidget*             widget_            = nullptr;
-    PowerWatcher*               power_watcher_     = nullptr;
-    QTimer*                     poll_timer_        = nullptr;
+    OpenRGBPluginAPIInterface*  api_                  = nullptr;
+    SettingsWidget*             widget_               = nullptr;
+    PowerWatcher*               power_watcher_        = nullptr;
+    MouseActivityWatcher*       mouse_watcher_        = nullptr;
 
-    std::string                 target_key_        = "DeathAdder";
-    bool                        reapply_on_change_ = true;
-    bool                        reapply_on_wake_   = true;
-    bool                        poll_enabled_      = true;
-    int                         poll_interval_sec_ = 20;
-    bool                        log_enabled_       = true;
+    std::string                 target_key_           = "DeathAdder";
+    bool                        reapply_on_change_    = true;
+    bool                        reapply_on_wake_      = true;
+    bool                        activity_detect_enabled_ = true;
+    int                         idle_resume_sec_      = 60;
+    bool                        log_enabled_          = true;
 
-    bool                        reapply_pending_   = false;
+    bool                        reapply_pending_      = false;
+    bool                        last_restore_ok_      = true;
 
     std::vector<DeviceSnap>     snapshots_;
 };

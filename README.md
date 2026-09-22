@@ -30,8 +30,9 @@ without Razer Synapse.
 
 **Measured 2026-09-22:** during ~5 min of idle + wake the mouse stayed
 enumerated the whole time (no `ABSENT` entries in `tools/mouse-presence.log`).
-→ case B: the plugin is designed around periodic re-apply (poll), with
-device-change and PC-wake triggers as fast paths.
+→ case B: the plugin is designed around detecting the **first mouse move after
+idle** (the device wakes and the user touches it again), with device-change and
+PC-wake triggers as additional fast paths.
 
 ## Plugin design (OpenRGB Plugin API v5, in-process, Qt 6)
 
@@ -46,14 +47,15 @@ What the plugin has available (from `OpenRGBPluginInterface.h`,
 | Re-apply state directly | `SetActiveMode()`, `SetCustomMode()`, `SetAllColors()`, `UpdateMode()`, `UpdateLEDs()` |
 | Or load a profile | `LoadProfile(name)` / `GetProfileList()` |
 | Force a rescan | `RescanDevices()` |
-| Timer poll (Qt) | own `QTimer` inside plugin widget/object |
+| Detect "mouse just woke up" | Windows `WH_MOUSE_LL` low-level hook: the next mouse event after a long quiet gap (`MouseActivityWatcher`) |
 
 ### Detection layers (implemented, first one that fires wins)
 
-1. **Poll** (configurable interval, default 20 s) — primary layer for case B:
-   re-apply the saved snapshot to the matched device. Trade-off: for animated
-   modes the animation restarts on each tick; lower the frequency or disable
-   the layer to taste.
+1. **Mouse activity** — a low-level `WH_MOUSE_LL` hook watches global mouse
+   events. When an event arrives after an idle gap `>= "пауза, считающаяся
+   сном"` (default 60 s, configurable), the mouse was presumably asleep, so the
+   snapshot is re-applied immediately (plus one retry ~2.6 s later in case the
+   device was still waking). No periodic timer, no idle overhead.
 2. **Device-list hook** — on `DEVICE_LIST_UPDATED`/`DETECTION_COMPLETE`,
    re-apply after a short delay (handles case A and PC boot / USB re-enumeration).
 3. **Power hook** — native Windows power events (WM_POWERBROADCAST resume) via
@@ -82,7 +84,8 @@ the installed Visual Studio generator) → produces
 
 Local structure:
 
-- `src/` — plugin implementation (WakePlugin, SettingsWidget, PowerWatcher)
+- `src/` — plugin implementation (WakePlugin, SettingsWidget, PowerWatcher,
+  MouseActivityWatcher)
 - `vendor/OpenRGBPluginSDK/` — plugin API v5 headers pinned from OpenRGB master
 - `tools/watch-mouse-sleep.ps1` — device presence logger
 

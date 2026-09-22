@@ -23,6 +23,8 @@ add_library(OpenRGBWakePlugin SHARED
     src/SettingsWidget.h
     src/PowerWatcher.cpp
     src/PowerWatcher.h
+    src/MouseActivityWatcher.cpp
+    src/MouseActivityWatcher.h
 )
 
 target_include_directories(OpenRGBWakePlugin PRIVATE

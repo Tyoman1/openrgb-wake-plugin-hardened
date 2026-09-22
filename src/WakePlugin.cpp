@@ -17,6 +17,7 @@
 #include <QString>
 #include <QTimer>
 
+#include "MouseActivityWatcher.h"
 #include "PowerWatcher.h"
 #include "SettingsWidget.h"
 
@@ -45,7 +46,7 @@ OpenRGBPluginInfo WakePlugin::GetPluginInfo()
 
     info.Name            = "Wake Plugin";
     info.Description     = "Re-applies device lighting when a wireless device wakes or reconnects";
-    info.Version         = "1.0.0";
+    info.Version         = "1.1.0";
     info.Commit          = "";
     info.URL             = "https://github.com/Tyoman1/openrgb-wake-plugin";
     info.Icon            = QImage();
@@ -73,12 +74,12 @@ void WakePlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
     LoadSettings();
 
     SettingsWidget::Settings widget_settings;
-    widget_settings.target_key        = QString::fromStdString(target_key_);
-    widget_settings.reapply_on_change = reapply_on_change_;
-    widget_settings.reapply_on_wake   = reapply_on_wake_;
-    widget_settings.poll_enabled      = poll_enabled_;
-    widget_settings.poll_interval_sec = poll_interval_sec_;
-    widget_settings.log_enabled       = log_enabled_;
+    widget_settings.target_key            = QString::fromStdString(target_key_);
+    widget_settings.reapply_on_change     = reapply_on_change_;
+    widget_settings.reapply_on_wake       = reapply_on_wake_;
+    widget_settings.activity_detect_enabled = activity_detect_enabled_;
+    widget_settings.idle_resume_sec       = idle_resume_sec_;
+    widget_settings.log_enabled           = log_enabled_;
 
     widget_ = new SettingsWidget(widget_settings);
     connect(widget_, &SettingsWidget::settingsChanged, this, &WakePlugin::SettingsChanged);
@@ -91,21 +92,28 @@ void WakePlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
         OnPowerResume();
     };
 
-    /* Periodic re-apply, for devices that stay enumerated while asleep */
-    poll_timer_ = new QTimer(this);
-    connect(poll_timer_, &QTimer::timeout, this, [this]()
+    /* Instant restore when the mouse wakes up: the first mouse event after
+       a long quiet gap means the user just picked the device up again */
+    mouse_watcher_ = new MouseActivityWatcher(this);
+    mouse_watcher_->setIdleThresholdMs(static_cast<quint64>(idle_resume_sec_) * 1000);
+    connect(mouse_watcher_, &MouseActivityWatcher::mouseResumed, this, [this]()
     {
-        if (snapshots_.empty())
+        /* Give the device a moment to finish waking up; a delayed second
+           attempt covers the case where it was not ready yet. */
+        QTimer::singleShot(700, this, [this]() { ReapplyTargets("mouse activity"); });
+        QTimer::singleShot(2600, this, [this]()
         {
-            SnapshotTargets();
-        }
-        else if (poll_enabled_)
-        {
-            ReapplyTargets("periodic");
-        }
+            if (!last_restore_ok_)
+            {
+                ReapplyTargets("mouse activity (retry)");
+            }
+        });
     });
 
-    UpdatePollTimer();
+    if (activity_detect_enabled_ && !mouse_watcher_->start())
+    {
+        Log("Warning: could not install mouse activity hook", LOG_LEVEL_WARNING);
+    }
 
     /* Capture the current state of the target device(s) if already detected */
     SnapshotTargets();
@@ -125,9 +133,11 @@ QMenu* WakePlugin::GetTrayMenu()
 
 void WakePlugin::Unload()
 {
-    if (poll_timer_)
+    if (mouse_watcher_)
     {
-        poll_timer_->stop();
+        mouse_watcher_->stop();
+        delete mouse_watcher_;
+        mouse_watcher_ = nullptr;
     }
 
     delete power_watcher_;
@@ -214,15 +224,32 @@ void WakePlugin::SettingsChanged()
 
     SettingsWidget::Settings widget_settings = widget_->GetSettings();
 
-    target_key_        = widget_settings.target_key.toStdString();
-    reapply_on_change_ = widget_settings.reapply_on_change;
-    reapply_on_wake_   = widget_settings.reapply_on_wake;
-    poll_enabled_      = widget_settings.poll_enabled;
-    poll_interval_sec_ = widget_settings.poll_interval_sec;
-    log_enabled_       = widget_settings.log_enabled;
+    target_key_             = widget_settings.target_key.toStdString();
+    reapply_on_change_      = widget_settings.reapply_on_change;
+    reapply_on_wake_        = widget_settings.reapply_on_wake;
+    activity_detect_enabled_ = widget_settings.activity_detect_enabled;
+    idle_resume_sec_        = widget_settings.idle_resume_sec;
+    log_enabled_            = widget_settings.log_enabled;
+
+    /* Apply watcher changes live */
+    if (mouse_watcher_)
+    {
+        mouse_watcher_->setIdleThresholdMs(static_cast<quint64>(idle_resume_sec_) * 1000);
+
+        if (activity_detect_enabled_)
+        {
+            if (!mouse_watcher_->start())
+            {
+                Log("Warning: could not install mouse activity hook", LOG_LEVEL_WARNING);
+            }
+        }
+        else
+        {
+            mouse_watcher_->stop();
+        }
+    }
 
     SaveSettings();
-    UpdatePollTimer();
 
     Log("Settings saved");
 }
@@ -500,6 +527,7 @@ void WakePlugin::ReapplyTargets(const char* reason)
     if (snapshots_.empty())
     {
         SnapshotTargets();
+        last_restore_ok_ = true;
         return;
     }
 
@@ -517,6 +545,8 @@ void WakePlugin::ReapplyTargets(const char* reason)
         }
     }
 
+    last_restore_ok_ = restored;
+
     char msg[160];
     std::snprintf(msg, sizeof(msg), "Re-applied lighting after %s (%s)", reason, restored ? "done" : "no target");
     Log(msg);
@@ -525,21 +555,6 @@ void WakePlugin::ReapplyTargets(const char* reason)
 /*---------------------------------------------------------*\
 | Settings                                                  |
 \*---------------------------------------------------------*/
-void WakePlugin::UpdatePollTimer()
-{
-    if (!poll_timer_)
-    {
-        return;
-    }
-
-    poll_timer_->stop();
-
-    if (poll_enabled_ && (poll_interval_sec_ > 0))
-    {
-        poll_timer_->start(poll_interval_sec_ * 1000);
-    }
-}
-
 void WakePlugin::LoadSettings()
 {
     if (!api_)
@@ -561,13 +576,13 @@ void WakePlugin::LoadSettings()
     {
         reapply_on_wake_ = settings["reapply_on_wake"].get<bool>();
     }
-    if (settings.contains("poll_enabled"))
+    if (settings.contains("activity_detect_enabled"))
     {
-        poll_enabled_ = settings["poll_enabled"].get<bool>();
+        activity_detect_enabled_ = settings["activity_detect_enabled"].get<bool>();
     }
-    if (settings.contains("poll_interval_sec"))
+    if (settings.contains("idle_resume_sec"))
     {
-        poll_interval_sec_ = settings["poll_interval_sec"].get<int>();
+        idle_resume_sec_ = settings["idle_resume_sec"].get<int>();
     }
     if (settings.contains("log_enabled"))
     {
@@ -583,12 +598,12 @@ void WakePlugin::SaveSettings()
     }
 
     nlohmann::json settings;
-    settings["target_key"]        = target_key_;
-    settings["reapply_on_change"] = reapply_on_change_;
-    settings["reapply_on_wake"]   = reapply_on_wake_;
-    settings["poll_enabled"]      = poll_enabled_;
-    settings["poll_interval_sec"] = poll_interval_sec_;
-    settings["log_enabled"]       = log_enabled_;
+    settings["target_key"]             = target_key_;
+    settings["reapply_on_change"]      = reapply_on_change_;
+    settings["reapply_on_wake"]        = reapply_on_wake_;
+    settings["activity_detect_enabled"] = activity_detect_enabled_;
+    settings["idle_resume_sec"]        = idle_resume_sec_;
+    settings["log_enabled"]            = log_enabled_;
 
     api_->SetSettings("OpenRGBWakePlugin", settings);
     api_->SaveSettings();
