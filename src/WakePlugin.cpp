@@ -1,14 +1,16 @@
 /*---------------------------------------------------------*\
 | OpenRGB Wake Plugin                                       |
 |                                                           |
-|  Re-sends the currently active lighting (as OpenRGB holds |
-|  it for the target device) when the device wakes up, the  |
-|  PC resumes, or a fresh session starts.                   |
+|  Restores device lighting when a wireless device wakes    |
+|  up, the PC resumes, or a fresh session starts.           |
 |                                                           |
-|  The plugin does not store colors anywhere: it reads the  |
-|  active state from the controller and pushes it down to   |
-|  the hardware again. OpenRGB itself is responsible for    |
-|  loading the desired profile at startup.                  |
+|  On each trigger the plugin asks OpenRGB to load the      |
+|  profile the user configured in OpenRGB's own Profile     |
+|  Manager settings (open/resume/service-startup profile).  |
+|  The plugin stores no colors and no profile names itself: |
+|  the profile name is read live from OpenRGB settings.     |
+|  If no auto-load profile is configured, the plugin falls  |
+|  back to re-sending the currently active lighting state.  |
 |                                                           |
 |  This file is part of the openrgb-wake-plugin project     |
 \*---------------------------------------------------------*/
@@ -51,8 +53,8 @@ OpenRGBPluginInfo WakePlugin::GetPluginInfo()
     OpenRGBPluginInfo info;
 
     info.Name            = "Wake Plugin";
-    info.Description     = "Re-applies device lighting when a wireless device wakes or reconnects";
-    info.Version         = "1.2.0";
+    info.Description     = "Loads the configured OpenRGB profile when a wireless device wakes or the PC resumes";
+    info.Version         = "1.3.0";
     info.Commit          = "";
     info.URL             = "https://github.com/Tyoman1/openrgb-wake-plugin";
     info.Icon            = QImage();
@@ -200,7 +202,7 @@ void WakePlugin::OnPowerResume()
 {
     if (reapply_on_wake_)
     {
-        QTimer::singleShot(2500, this, [this]() { ApplyTargets("PC wake"); });
+        QTimer::singleShot(2500, this, [this]() { ApplyTargets("PC wake", true); });
     }
 }
 
@@ -263,7 +265,69 @@ bool WakePlugin::MatchesTarget(RGBControllerInterface* ctrl)
     return hay.find(key) != std::string::npos;
 }
 
-bool WakePlugin::ApplyTargets(const char* reason)
+/*---------------------------------------------------------*\
+| Profile Name Resolution                                   |
+|                                                           |
+|  Reads the profile name from OpenRGB's own ProfileManager |
+|  settings: which profile to load is the user's choice in  |
+|  OpenRGB, the plugin only follows it. Returns an empty    |
+|  string when no auto-load profile is configured.          |
+\*---------------------------------------------------------*/
+std::string WakePlugin::ResolveProfileName(bool resume_trigger)
+{
+    if (!api_)
+    {
+        return "";
+    }
+
+    nlohmann::json pm_settings;
+
+    try
+    {
+        pm_settings = api_->GetSettings("ProfileManager");
+    }
+    catch (...)
+    {
+        return "";
+    }
+
+    /* Trigger-appropriate key first, then fallbacks */
+    const char* keys[3];
+
+    if (resume_trigger)
+    {
+        keys[0] = "resume_profile";
+        keys[1] = "open_profile";
+        keys[2] = "service_startup_profile";
+    }
+    else
+    {
+        keys[0] = "open_profile";
+        keys[1] = "service_startup_profile";
+        keys[2] = "resume_profile";
+    }
+
+    for (const char* key : keys)
+    {
+        if (pm_settings.contains(key)
+            && pm_settings[key].is_object()
+            && pm_settings[key].value("enabled", false)
+            && pm_settings[key].contains("name")
+            && pm_settings[key]["name"].is_string())
+        {
+            std::string name = pm_settings[key]["name"].get<std::string>();
+
+            if (!name.empty())
+            {
+                return name;
+            }
+        }
+    }
+
+    return "";
+}
+
+bool WakePlugin::ApplyTargets(const char* reason, bool resume_trigger)
 {
     if (!api_)
     {
@@ -271,6 +335,48 @@ bool WakePlugin::ApplyTargets(const char* reason)
         return false;
     }
 
+    /*-----------------------------------------------------*\
+    | Preferred path: load the profile configured in        |
+    | OpenRGB's Profile Manager. This pulls the real saved  |
+    | state (not the possibly-stale live state) and lets    |
+    | OpenRGB apply it to every device it matches.          |
+    \*-----------------------------------------------------*/
+    std::string profile_name = ResolveProfileName(resume_trigger);
+
+    if (!profile_name.empty())
+    {
+        bool loaded = false;
+
+        try
+        {
+            loaded = api_->LoadProfile(profile_name);
+        }
+        catch (...)
+        {
+            loaded = false;
+        }
+
+        last_restore_ok_ = loaded;
+
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "Loaded profile '%s' after %s (%s)", profile_name.c_str(), reason, loaded ? "done" : "failed");
+        Log(msg);
+
+        if (widget_)
+        {
+            widget_->SetStatusText(loaded
+                ? QString("Загружен профиль «%1» (%2)").arg(QString::fromStdString(profile_name), reason)
+                : "Не удалось загрузить профиль");
+        }
+
+        return loaded;
+    }
+
+    /*-----------------------------------------------------*\
+    | Fallback path: no auto-load profile is configured in  |
+    | OpenRGB, so re-send the currently active lighting of  |
+    | the matched target device instead.                    |
+    \*-----------------------------------------------------*/
     bool applied = false;
 
     for (RGBControllerInterface* ctrl : api_->GetRGBControllers())

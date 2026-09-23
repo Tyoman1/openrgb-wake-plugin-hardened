@@ -48,7 +48,8 @@ public:
 
 private:
     bool                MatchesTarget(RGBControllerInterface* ctrl);
-    bool                ApplyTargets(const char* reason);
+    bool                ApplyTargets(const char* reason, bool resume_trigger = false);
+    std::string         ResolveProfileName(bool resume_trigger);
     void                ApplyStartup();
     void                LoadSettings();
     void                SaveSettings();
