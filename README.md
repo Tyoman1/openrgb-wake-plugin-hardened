@@ -72,8 +72,13 @@ the plugin itself.
    is a safety net on top of OpenRGB's own profile load.
 2. **Mouse activity** — a low-level `WH_MOUSE_LL` hook watches global mouse
    events. When an event arrives after an idle gap `>= "пауза, считающаяся
-   сном"` (default 60 s, configurable 10–600 s), load the profile (700 ms),
-   with one retry ~2.6 s later if the first attempt failed. No periodic timer.
+   сном"` (default 60 s, configurable 10–600 s), load the profile twice
+   (700 ms and ~2.6 s; `LoadProfile` reports success even if the device was
+   mid-wake and missed the write, so the retry is unconditional). After plugin
+   start and after a PC resume the watcher is additionally **armed one-shot**:
+   the very first mouse movement then counts as a wake regardless of the idle
+   gap — this covers the case where the startup apply went out while the mouse
+   was still asleep.
 3. **PC resume** — native Windows power events (`WM_POWERBROADCAST` resume) via
    a `QAbstractNativeEventFilter`; load the profile 2.5 s after resume.
 
@@ -126,7 +131,9 @@ Local structure:
 - [x] Implement v1.2.0: drop snapshot, re-send active lighting, startup timer
 - [x] Diagnose boot-dark mouse: profile matched a stale empty-serial duplicate
       entry (dark) instead of the real one; v1.3.0: plugin loads the configured
-      profile itself on every trigger
+      profile itself on every trigger; v1.3.1: unconditional wake retry +
+      one-shot "first touch after start/resume" arming (a successful profile
+      load can still miss a sleeping mouse)
 - [ ] CI build green → download DLL from Actions artifact
 - [ ] Install into OpenRGB plugins dir
 - [ ] One-time setup: save profile + enable “Load Profile on Open” in OpenRGB

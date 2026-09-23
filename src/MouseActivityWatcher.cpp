@@ -38,6 +38,16 @@ void MouseActivityWatcher::setIdleThresholdMs(quint64 ms)
     idle_threshold_ms_ = ms;
 }
 
+void MouseActivityWatcher::armOneShot()
+{
+    /* Pretend the last event happened exactly one idle gap ago: the next
+       event then satisfies the wake condition once, and normal gap logic
+       resumes afterwards. */
+    quint64 now = static_cast<quint64>(GetTickCount64());
+
+    last_event_ms_ = (now > idle_threshold_ms_) ? (now - idle_threshold_ms_) : 1;
+}
+
 bool MouseActivityWatcher::start()
 {
     if (active_hook != nullptr)

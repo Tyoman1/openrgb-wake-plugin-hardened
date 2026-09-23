@@ -17,6 +17,11 @@ public:
     /* Idle gap (in ms) after which the next mouse event counts as a wake. */
     void setIdleThresholdMs(quint64 ms);
 
+    /* Make the very next mouse event count as a wake, exactly once.
+       Used after plugin start / PC resume, when the mouse is likely
+       asleep and the first touch means it just woke up. */
+    void armOneShot();
+
     /* Install the OS-level mouse hook. Returns false on failure. */
     bool start();
     void stop();
