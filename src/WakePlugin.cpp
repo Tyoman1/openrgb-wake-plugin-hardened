@@ -54,7 +54,7 @@ OpenRGBPluginInfo WakePlugin::GetPluginInfo()
 
     info.Name            = "Wake Plugin";
     info.Description     = "Loads the configured OpenRGB profile when a wireless device wakes or the PC resumes";
-    info.Version         = "1.3.1";
+    info.Version         = "1.3.2";
     info.Commit          = "";
     info.URL             = "https://github.com/Tyoman1/openrgb-wake-plugin";
     info.Icon            = QImage();
@@ -111,17 +111,22 @@ void WakePlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
         QTimer::singleShot(2600, this, [this]() { ApplyTargets("mouse activity (retry)"); });
     });
 
-    if (activity_detect_enabled_ && !mouse_watcher_->start())
-    {
-        Log("Warning: could not install mouse activity hook", LOG_LEVEL_WARNING);
-    }
-
-    /* The startup apply below may go out while the mouse is still asleep;
-       arm a one-shot trigger so that the first touch of the mouse after
-       plugin start applies the profile to the now-awake device. */
     if (activity_detect_enabled_)
     {
-        mouse_watcher_->armOneShot();
+        if (!mouse_watcher_->start())
+        {
+            Log("Warning: could not install mouse activity hook", LOG_LEVEL_WARNING);
+        }
+        else
+        {
+            Log("Mouse activity hook installed");
+
+            /* The startup apply below may go out while the mouse is still
+               asleep; arm a one-shot trigger so that the first touch of the
+               mouse after plugin start applies the profile to the now-awake
+               device. */
+            mouse_watcher_->armOneShot();
+        }
     }
 
     /* Fresh session: re-send the active lighting shortly after startup.

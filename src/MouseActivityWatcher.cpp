@@ -58,7 +58,17 @@ bool MouseActivityWatcher::start()
     last_event_ms_  = 0;
     active_instance = this;
 
-    HHOOK hook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, GetModuleHandleW(nullptr), 0);
+    /* The hook procedure lives in this DLL: hand Windows this module's own
+       handle. GetModuleHandle(NULL) would return the host EXE's handle, and
+       a global low-level hook whose procedure is not inside the given module
+       installs successfully but is never called. */
+    HMODULE self_module = nullptr;
+
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&LowLevelMouseProc),
+                       &self_module);
+
+    HHOOK hook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, self_module, 0);
     if (hook == nullptr)
     {
         active_instance = nullptr;

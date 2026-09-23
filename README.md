@@ -133,7 +133,9 @@ Local structure:
       entry (dark) instead of the real one; v1.3.0: plugin loads the configured
       profile itself on every trigger; v1.3.1: unconditional wake retry +
       one-shot "first touch after start/resume" arming (a successful profile
-      load can still miss a sleeping mouse)
+      load can still miss a sleeping mouse); v1.3.2: pass the plugin DLL's own
+      module handle to SetWindowsHookEx — with the host EXE's handle the global
+      mouse hook installed but never fired
 - [ ] CI build green → download DLL from Actions artifact
 - [ ] Install into OpenRGB plugins dir
 - [ ] One-time setup: save profile + enable “Load Profile on Open” in OpenRGB
