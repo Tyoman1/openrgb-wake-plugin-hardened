@@ -110,7 +110,8 @@ jobs:
           $branch = "$env:GITHUB_REF_NAME"
           Write-Host "Branch: $branch"
           if ($branch -ne "main") {
-            Write-Host "::warning::Current branch is '$branch', not 'main' — release artifact will note this"
+            Write-Host "::error::Release builds must be from main, current branch is '$branch'"
+            exit 1
           }
           "BRANCH=$branch" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
 
@@ -170,59 +171,57 @@ jobs:
         shell: pwsh
         run: |
           $bytes = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
-
           $peOffset = [System.BitConverter]::ToUInt32($bytes, 0x3C)
-          $oh = $peOffset + 4 + 20
-          $dllChars = [System.BitConverter]::ToUInt16($bytes, $oh + 70)
-          $magic    = [System.BitConverter]::ToUInt16($bytes, $oh)
+          $oh = $peOffset + 4 + 20          # optional header start
+          $magic = [System.BitConverter]::ToUInt16($bytes, $oh)
           $arch = if ($magic -eq 0x020B) { "PE32+" } else { "PE32" }
 
-          # Standard PE flags
-          $aslr = ($dllChars -band 0x0040) -ne 0
-          $dep  = ($dllChars -band 0x0100) -ne 0
-          $cfg  = ($dllChars -band 0x4000) -ne 0
-          $heva = ($dllChars -band 0x0020) -ne 0
-
-          # CET: IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS = 20
-          $debugDirRVA  = [System.BitConverter]::ToUInt32($bytes, $dataDirOffset + 6 * 8)
-          $debugDirSize = [System.BitConverter]::ToUInt32($bytes, $dataDirOffset + 6 * 8 + 4)
-
-          # Convert RVA to file offset
+          # File header info
           $fh = $peOffset + 4
           $numSec = [System.BitConverter]::ToUInt16($bytes, $fh + 2)
           $optHdrSz = [System.BitConverter]::ToUInt16($bytes, $fh + 16)
           $secOff = $fh + 20 + $optHdrSz
 
-          $debugOff = 0
-          for ($i = 0; $i -lt $numSec; $i++) {
-            $so = $secOff + $i * 40
-            $secVA  = [System.BitConverter]::ToUInt32($bytes, $so + 12)
-            $secRaw = [System.BitConverter]::ToUInt32($bytes, $so + 20)
-            $secSz  = [System.BitConverter]::ToUInt32($bytes, $so + 16)
-            if ($debugDirRVA -ge $secVA -and $debugDirRVA -lt ($secVA + $secSz)) {
-              $debugOff = $debugDirRVA - $secVA + $secRaw
+          # Helper: RVA to file offset
+          function RvaToRaw($rva) {
+            param($rva)
+            for ($i = 0; $i -lt $numSec; $i++) {
+              $so = $secOff + $i * 40
+              $secVA  = [System.BitConverter]::ToUInt32($bytes, $so + 12)
+              $secRaw = [System.BitConverter]::ToUInt32($bytes, $so + 20)
+              $secSz  = [System.BitConverter]::ToUInt32($bytes, $so + 16)
+              if ($rva -ge $secVA -and $rva -lt ($secVA + $secSz)) {
+                return $rva - $secVA + $secRaw
+              }
             }
+            return 0
           }
 
+          # ── Standard DllCharacteristics ──────────────────
+          $dllChars = [System.BitConverter]::ToUInt16($bytes, $oh + 70)
+          $aslr = ($dllChars -band 0x0040) -ne 0
+          $dep  = ($dllChars -band 0x0100) -ne 0
+          $cfg  = ($dllChars -band 0x4000) -ne 0
+          $heva = ($dllChars -band 0x0020) -ne 0
+
+          # ── Data directories ─────────────────────────────
+          $dataDirOfs = $oh + 112   # first data directory for PE32+
+          # Debug Directory = entry 6
+          $debugRVA  = [System.BitConverter]::ToUInt32($bytes, $dataDirOfs + 6 * 8)
+          $debugSize = [System.BitConverter]::ToUInt32($bytes, $dataDirOfs + 6 * 8 + 4)
+
+          # ── CET via IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS (type 20) ──
           $cet = $false
-          if ($debugOff -gt 0 -and $debugDirSize -gt 0) {
-            $numDebugEntries = [int]($debugDirSize / 28)
-            for ($i = 0; $i -lt $numDebugEntries; $i++) {
-              $entryOff = $debugOff + $i * 28
+          $debugOff = RvaToRaw $debugRVA
+          if ($debugOff -gt 0 -and $debugSize -gt 0) {
+            $numDebugEntries = [int]($debugSize / 28)  # each IMAGE_DEBUG_DIRECTORY is 28 bytes
+            for ($d = 0; $d -lt $numDebugEntries; $d++) {
+              $entryOff = $debugOff + $d * 28
               $debugType = [System.BitConverter]::ToUInt32($bytes, $entryOff + 12)
               if ($debugType -eq 20) {
                 $dataRVA  = [System.BitConverter]::ToUInt32($bytes, $entryOff + 20)
                 $dataSize = [System.BitConverter]::ToUInt32($bytes, $entryOff + 24)
-                $dataOff = 0
-                for ($s = 0; $s -lt $numSec; $s++) {
-                  $so = $secOff + $s * 40
-                  $secVA  = [System.BitConverter]::ToUInt32($bytes, $so + 12)
-                  $secRaw = [System.BitConverter]::ToUInt32($bytes, $so + 20)
-                  $secSz  = [System.BitConverter]::ToUInt32($bytes, $so + 16)
-                  if ($dataRVA -ge $secVA -and $dataRVA -lt ($secVA + $secSz)) {
-                    $dataOff = $dataRVA - $secVA + $secRaw
-                  }
-                }
+                $dataOff = RvaToRaw $dataRVA
                 if ($dataOff -gt 0 -and $dataSize -ge 2) {
                   $exChars = [System.BitConverter]::ToUInt16($bytes, $dataOff)
                   if ($exChars -band 0x0001) { $cet = $true }
@@ -232,26 +231,28 @@ jobs:
             }
           }
 
-          # GS (security cookie)
-          $gsPattern = [System.Text.Encoding]::ASCII.GetBytes("__security_cookie")
+          # ── GS via IMAGE_LOAD_CONFIG_DIRECTORY64.SecurityCookie ──
           $gs = $false
-          for ($i = 0; $i -le $bytes.Length - $gsPattern.Length; $i++) {
-            $match = $true
-            for ($j = 0; $j -lt $gsPattern.Length; $j++) { if ($bytes[$i+$j] -ne $gsPattern[$j]) { $match = $false; break } }
-            if ($match) { $gs = $true; break }
+          $loadCfgRVA  = [System.BitConverter]::ToUInt32($bytes, $dataDirOfs + 10 * 8)
+          $loadCfgSize = [System.BitConverter]::ToUInt32($bytes, $dataDirOfs + 10 * 8 + 4)
+          $loadCfgOff = RvaToRaw $loadCfgRVA
+          if ($loadCfgOff -gt 0 -and $loadCfgSize -ge 80) {
+            # For PE32+, IMAGE_LOAD_CONFIG_DIRECTORY64 has SecurityCookie at offset 0x30 (48)
+            $cookieField = [System.BitConverter]::ToUInt64($bytes, $loadCfgOff + 0x30)
+            if ($cookieField -ne 0) { $gs = $true }
           }
 
-          # Persist for BUILD_REPORT
-          "PE_ARCH=$arch"           | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
-          "PE_ASLR=$aslr"           | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
-          "PE_DEP=$dep"             | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
-          "PE_CFG=$cfg"             | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
-          "PE_HEVA=$heva"           | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
-          "PE_CET=$cet"             | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
-          "PE_GS=$gs"               | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          # Persist
+          "PE_ARCH=$arch"             | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          "PE_ASLR=$aslr"             | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          "PE_DEP=$dep"               | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          "PE_CFG=$cfg"               | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          "PE_HEVA=$heva"             | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          "PE_CET=$cet"               | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          "PE_GS=$gs"                 | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
           "PE_DLLCHARS=0x$('{0:X4}' -f $dllChars)" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
 
-          Write-Host "ASLR: $aslr | DEP: $dep | CFG: $cfg | HE-VA: $heva | CET: $cet | GS: $gs"
+          Write-Host "ARCH=$arch | ASLR=$aslr DEP=$dep CFG=$cfg HE-VA=$heva CET=$cet GS=$gs DLLCHARS=0x$('{0:X4}' -f $dllChars)"
 
       # ── Import check ──────────────────────────────────
       - name: Check DLL imports
