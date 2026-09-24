@@ -25,50 +25,29 @@ jobs:
           python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --outputdir "$env:RUNNER_TEMP\Qt"
           "Qt6_DIR=$env:RUNNER_TEMP\Qt\6.8.3\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii
 
-      - name: Install pinned CMake
-        shell: pwsh
-        run: |
-          python -m pip install --disable-pip-version-check cmake==3.31.6
-          cmake --version
-
       - name: Configure
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
+          # Use the VS-provided cmake which knows VS generators
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          Write-Host "VS 2022: $vsPath"
 
-          # Collect the Visual Studio generator names this CMake knows, newest first
-          $gens = @()
-          $helpOut = (& cmake --help 2>&1) | Out-String
-          foreach ($m in [regex]::Matches($helpOut, 'Visual Studio \d+ \d{4}')) {
-            if ($gens -notcontains $m.Value) { $gens += $m.Value }
-          }
-          [array]::Reverse($gens)
-          Write-Host "candidate generators: $($gens -join ', ')"
+          # VS 2022 ships cmake; use it directly
+          $cmake = "$vsPath\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+          Write-Host "cmake: $cmake"
+          & $cmake --version
 
-          $configured = $false
-          foreach ($gen in $gens) {
-            if (Test-Path build) { Remove-Item -Recurse -Force build }
-            $out = & cmake -S . -B build -G $gen -A x64 "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR" 2>&1 | Out-String
-            Write-Host "--- generator: $gen ---"
-            Write-Host $out
-            if ($LASTEXITCODE -eq 0) { $configured = $true; "configured with $gen" | Set-Content configure.log; break }
-          }
-
-          if (-not $configured) {
-            if (Test-Path build) { Remove-Item -Recurse -Force build }
-            $out = & cmake -S . -B build "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR" 2>&1 | Out-String
-            Write-Host "--- default generator ---"
-            Write-Host $out
-            if ($LASTEXITCODE -ne 0) { Write-Host "::error title=CMake configure failed::$((($out -split '\r?\n') | Where-Object { $_ } | Select-Object -Last 12) -join ' | ')"; exit 1 }
-          }
+          & $cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR"
 
       - name: Build
         shell: pwsh
         run: |
-          $out = & cmake --build build --config Release --parallel 4 2>&1 | Out-String
-          Write-Host $out
-          $out | Set-Content -Path build.log
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error title=Compile failed::$((($out -split '\r?\n') | Where-Object { $_ } | Select-Object -Last 40) -join ' | ')"; exit 1 }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $cmake = "$vsPath\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+          & $cmake --build build --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: SHA256
         shell: pwsh
