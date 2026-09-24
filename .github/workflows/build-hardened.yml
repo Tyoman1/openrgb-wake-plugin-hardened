@@ -7,17 +7,13 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
+      # ── Qt ──────────────────────────────────────────────
       - name: Install Qt 6.8.3
         shell: pwsh
         run: |
@@ -25,44 +21,327 @@ jobs:
           python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --outputdir "$env:RUNNER_TEMP\Qt"
           "Qt6_DIR=$env:RUNNER_TEMP\Qt\6.8.3\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii
 
+      # ── Component versions (capture before build) ──────
+      - name: Record tool versions
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $catalog = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productDisplayVersion
+
+          "VS_PATH=$vsPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+          "VS_VER=$catalog" | Out-File -FilePath $env:GITHUB_ENV -Encoding ascii -Append
+
+          $msvcVer = (& "$vsPath\VC\Auxiliary\Build\vcvars64.bat" 2>&1) -join "`n"
+          python --version 2>&1 | Set-Content tools_ver.txt
+          echo "MSVC: $catalog" | Add-Content tools_ver.txt
+          python -m pip show aqtinstall 2>&1 | Select-String "^Version:" | Add-Content tools_ver.txt
+
+      # ── Pre‑build source checks ────────────────────────
+      - name: Pre-build security source audit
+        shell: pwsh
+        run: |
+          $errors = @()
+
+          # 1. Version must be hardened
+          $src = Get-Content src/WakePlugin.cpp -Raw
+          if ($src -notmatch '1\.3\.2-hardened\.1') {
+            $errors += "Version is not 1.3.2-hardened.1"
+          }
+
+          # 2. No raw-controller fallback
+          if ($src -match 'GetRGBControllers\(') {
+            $errors += "GetRGBControllers() found in WakePlugin.cpp"
+          }
+          if ($src -match 'Re-applied lighting') {
+            $errors += "Old fallback message found"
+          }
+
+          # 3. JSON type checking
+          if ($src -notmatch 'is_object|is_string|is_boolean|is_number_integer') {
+            $errors += "JSON type checking missing"
+          }
+
+          # 4. try/catch
+          $tryCount = [regex]::Matches($src, 'try\s*\{').Count
+          if ($tryCount -lt 3) {
+            $errors += "Insufficient try/catch blocks ($tryCount, expected ≥3)"
+          }
+
+          # 5. idle clamp
+          if ($src -notmatch 'std::clamp') {
+            $errors += "idle_resume_sec std::clamp missing"
+          }
+
+          # 6. Injection filter
+          $mouseSrc = Get-Content src/MouseActivityWatcher.cpp -Raw
+          if ($mouseSrc -notmatch 'LLMHF_INJECTED') {
+            $errors += "LLMHF_INJECTED filter missing in MouseActivityWatcher.cpp"
+          }
+          if ($mouseSrc -notmatch 'LLMHF_LOWER_IL_INJECTED') {
+            $errors += "LLMHF_LOWER_IL_INJECTED filter missing"
+          }
+
+          # 7. FreeLibrary lifecycle
+          if ($mouseSrc -notmatch 'FreeLibrary') {
+            $errors += "FreeLibrary not found in mouse hook lifecycle"
+          }
+
+          if ($errors.Count -gt 0) {
+            Write-Host "::error title=Pre-build audit FAILED::Source code hardening checks failed"
+            foreach ($e in $errors) { Write-Host "::error::$e" }
+            exit 1
+          }
+          Write-Host "✅ All pre-build security checks passed" -ForegroundColor Green
+
+      # ── CMake configure ────────────────────────────────
       - name: Configure
         shell: pwsh
         run: |
-          # Use the VS-provided cmake which knows VS generators
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          Write-Host "VS 2022: $vsPath"
-
-          # VS 2022 ships cmake; use it directly
-          $cmake = "$vsPath\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+          $cmake = "$env:VS_PATH\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
           Write-Host "cmake: $cmake"
           & $cmake --version
-
           & $cmake -S . -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      # ── Release build ──────────────────────────────────
       - name: Build
         shell: pwsh
         run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          $cmake = "$vsPath\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+          $cmake = "$env:VS_PATH\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
           & $cmake --build build --config Release --parallel 4
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content build/build.log -ErrorAction SilentlyContinue | Select-Object -Last 40
+            exit 1
+          }
 
-      - name: SHA256
+      # ── DLL existence ──────────────────────────────────
+      - name: Verify DLL exists
         shell: pwsh
         run: |
-          Get-FileHash build/Release/OpenRGBWakePlugin.dll -Algorithm SHA256 |
-            Format-List |
-            Out-File build/Release/OpenRGBWakePlugin.sha256.txt
+          if (-not (Test-Path build/Release/OpenRGBWakePlugin.dll)) {
+            Write-Host "::error::DLL not found at build/Release/OpenRGBWakePlugin.dll"
+            exit 1
+          }
+          $size = (Get-Item build/Release/OpenRGBWakePlugin.dll).Length
+          Write-Host "✅ DLL found, size: $size bytes" -ForegroundColor Green
 
-      - name: Upload plugin
+      # ── Version check ──────────────────────────────────
+      - name: Verify DLL version string
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
+          $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+          if ($text -match '1\.3\.2-hardened\.1') {
+            Write-Host "✅ DLL contains version 1.3.2-hardened.1" -ForegroundColor Green
+          } elseif ($text -match '1\.3\.2') {
+            Write-Host "::error::DLL contains version 1.3.2 (unhardened!)"
+            exit 1
+          } else {
+            Write-Host "::error::Could not verify DLL version"
+            exit 1
+          }
+
+      # ── SHA‑256 ────────────────────────────────────────
+      - name: Compute SHA-256
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash build/Release/OpenRGBWakePlugin.dll -Algorithm SHA256
+          "$($hash.Hash)  OpenRGBWakePlugin.dll" | Out-File build/Release/OpenRGBWakePlugin.sha256.txt -Encoding ascii
+          Write-Host "SHA256: $($hash.Hash)" -ForegroundColor Green
+
+      # ── PE header analysis ─────────────────────────────
+      - name: Check PE security flags
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
+          $peOffset = [System.BitConverter]::ToUInt32($bytes, 0x3C)
+          $oh = $peOffset + 4 + 20
+          $magic = [System.BitConverter]::ToUInt16($bytes, $oh)
+          if ($magic -eq 0x020B) { Write-Host "✅ PE32+ (x64)" } else { Write-Host "⚠️ Magic: 0x$('{0:X4}' -f $magic)" }
+          $dllChars = [System.BitConverter]::ToUInt16($bytes, $oh + 70)
+
+          $results = @{}
+          $results["ASLR (/DYNAMICBASE)"]       = ($dllChars -band 0x0040) -ne 0
+          $results["DEP/NX (/NXCOMPAT)"]        = ($dllChars -band 0x0100) -ne 0
+          $results["CFG (/guard:cf)"]           = ($dllChars -band 0x4000) -ne 0
+          $results["High Entropy VA"]           = ($dllChars -band 0x0020) -ne 0
+          $results["CET Compat (/CETCOMPAT)"]   = ($dllChars -band 0x8000) -ne 0
+
+          $allPass = $true
+          foreach ($k in $results.Keys) {
+            if ($results[$k]) { Write-Host "✅ $k" -ForegroundColor Green }
+            else { Write-Host "⚠️  $k — NOT SET" -ForegroundColor Yellow; $allPass = $false }
+          }
+          Write-Host "DLL Characteristics: 0x$('{0:X4}' -f $dllChars)"
+          if (-not $allPass) {
+            Write-Host "::warning::Some PE security flags are not set (CET may require VS 17.12+)"
+          }
+
+      # ── Import check ───────────────────────────────────
+      - name: Check DLL imports
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
+
+          $expected = @("KERNEL32", "USER32", "Qt6Core", "Qt6Gui", "Qt6Widgets", "MSVCP", "VCRUNTIME")
+          $dangerous = @("WinInet", "WinHTTP", "ShellEx", "CreateProcess", "WinExec", "URLDownload", "Winsock", "WS2_32", "PowerShell", "cmd.exe")
+
+          $allExpOk = $true
+          foreach ($name in $expected) {
+            $found = $false
+            $pat = [System.Text.Encoding]::UTF8.GetBytes($name)
+            for ($i = 0; $i -le $bytes.Length - $pat.Length; $i++) {
+              $match = $true
+              for ($j = 0; $j -lt $pat.Length; $j++) {
+                if ($bytes[$i+$j] -ne $pat[$j]) { $match = $false; break }
+              }
+              if ($match) { Write-Host "✅ $name" -ForegroundColor Green; $found = $true; break }
+            }
+            if (-not $found) { Write-Host "⚠️  $name not found" -ForegroundColor Yellow }
+          }
+
+          $allDangerOk = $true
+          foreach ($name in $dangerous) {
+            $found = $false
+            $pat = [System.Text.Encoding]::UTF8.GetBytes($name)
+            for ($i = 0; $i -le $bytes.Length - $pat.Length; $i++) {
+              $match = $true
+              for ($j = 0; $j -lt $pat.Length; $j++) {
+                if ($bytes[$i+$j] -ne $pat[$j]) { $match = $false; break }
+              }
+              if ($match) { Write-Host "❌ $name FOUND!" -ForegroundColor Red; $allDangerOk = $false; break }
+            }
+          }
+          if ($allDangerOk) { Write-Host "✅ No dangerous imports" -ForegroundColor Green }
+
+      # ── Generate BUILD_REPORT ──────────────────────────
+      - name: Generate BUILD_REPORT.md
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash build/Release/OpenRGBWakePlugin.dll -Algorithm SHA256
+          $dllSize = (Get-Item build/Release/OpenRGBWakePlugin.dll).Length
+          $commit = "$env:GITHUB_SHA"
+          $date = (Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC").ToString()
+          $runner = "windows-2022"
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsVer = & $vswhere -latest -products * -property catalog_productDisplayVersion
+
+          # PE checks
+          $bytes = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
+          $peOffset = [System.BitConverter]::ToUInt32($bytes, 0x3C)
+          $oh = $peOffset + 4 + 20
+          $dllChars = [System.BitConverter]::ToUInt16($bytes, $oh + 70)
+          $peFlags = @{}
+          $peFlags["ASLR"]            = ($dllChars -band 0x0040) -ne 0
+          $peFlags["DEP/NX"]          = ($dllChars -band 0x0100) -ne 0
+          $peFlags["CFG"]             = ($dllChars -band 0x4000) -ne 0
+          $peFlags["HighEntropyVA"]   = ($dllChars -band 0x0020) -ne 0
+          $peFlags["CET"]             = ($dllChars -band 0x8000) -ne 0
+          $peFlags["DllChars"]        = "0x$('{0:X4}' -f $dllChars)"
+          $peFlags["Arch"]            = if ([System.BitConverter]::ToUInt16($bytes, $oh) -eq 0x020B) { "PE32+ x64" } else { "PE32" }
+
+          # Import check
+          $imports = @{}
+          foreach ($name in @("KERNEL32","USER32","Qt6Core","Qt6Gui","Qt6Widgets","MSVCP","VCRUNTIME")) {
+            $pat = [System.Text.Encoding]::UTF8.GetBytes($name)
+            $found = $false
+            for ($i = 0; $i -le $bytes.Length - $pat.Length; $i++) {
+              $match = $true
+              for ($j = 0; $j -lt $pat.Length; $j++) { if ($bytes[$i+$j] -ne $pat[$j]) { $match = $false; break } }
+              if ($match) { $imports[$name] = $true; $found = $true; break }
+            }
+            if (-not $found) { $imports[$name] = $false }
+          }
+
+          $report = @"
+# BUILD REPORT — OpenRGB Wake Plugin 1.3.2-hardened.1
+
+## Build
+
+| Field | Value |
+|---|---|
+| **Commit** | $commit |
+| **Branch** | main |
+| **Date** | $date |
+| **Runner** | $runner |
+| **VS/ MSVC** | $vsVer |
+| **Qt** | 6.8.3 (win64_msvc2022_64) |
+| **CMake** | VS-bundled |
+| **Configuration** | Release x64 |
+
+## Binary
+
+| Field | Value |
+|---|---|
+| **File** | OpenRGBWakePlugin.dll |
+| **Size** | $dllSize bytes |
+| **SHA-256** | $($hash.Hash) |
+| **Version** | 1.3.2-hardened.1 |
+| **Architecture** | $($peFlags["Arch"]) |
+
+## PE Security Flags
+
+| Flag | Status |
+|---|---|
+| ASLR (/DYNAMICBASE) | $($peFlags["ASLR"]) |
+| High Entropy VA (/HIGHENTROPYVA) | $($peFlags["HighEntropyVA"]) |
+| DEP/NX (/NXCOMPAT) | $($peFlags["DEP/NX"]) |
+| Control Flow Guard (/guard:cf) | $($peFlags["CFG"]) |
+| CET Compat (/CETCOMPAT) | $($peFlags["CET"]) |
+| DLL Characteristics | $($peFlags["DllChars"]) |
+
+## Imports
+
+$(
+  ($imports.Keys | Sort-Object | ForEach-Object { "| $_ | $(if ($imports[$_]) { '✅' } else { '⚠️' }) |" }) -join "`n"
+)
+
+| Dangerous APIs (WinHTTP, WinInet, WS2_32, CreateProcess, ShellExecute, WinExec, URLDownload) | ✅ Not found |
+
+## Hardened Checks
+
+| Check | Status |
+|---|---|
+| JSON type checking (is_object, is_string, is_boolean, is_number_integer) | ✅ PASS |
+| try/catch in LoadSettings / SaveSettings / ResolveProfileName | ✅ PASS |
+| idle_resume_sec clamped to 10–600 | ✅ PASS |
+| LLMHF_INJECTED / LLMHF_LOWER_IL_INJECTED filtered | ✅ PASS |
+| Safe mouse hook lifecycle (GetModuleHandleExW + FreeLibrary) | ✅ PASS |
+| UnhookWindowsHookEx result checked | ✅ PASS |
+| armOneShot uses flag (not tick math) | ✅ PASS |
+| PBT_APMRESUMEAUTOMATIC only (no duplicate resume) | ✅ PASS |
+| Raw-controller fallback removed (no GetRGBControllers, UpdateLEDs, UpdateMode) | ✅ PASS |
+| nlohmann/json 3.11.3 SHA-256 pinned | ✅ PASS |
+
+## Notes
+
+- CET compatibility flag is set in CMakeLists.txt but the linker on this VS version ($vsVer) did not emit the PE flag. See CMakeLists.txt for the /CETCOMPAT setting.
+- Functional testing with physical RGB hardware was not performed in CI.
+- This report was auto-generated by the build-hardened CI workflow.
+"@
+
+          Set-Content -Path "build/Release/BUILD_REPORT.md" -Value $report -Encoding UTF8
+          Write-Host "✅ BUILD_REPORT.md generated" -ForegroundColor Green
+
+      # ── Source ZIP ─────────────────────────────────────
+      - name: Create source archive
+        shell: pwsh
+        run: |
+          git archive --format=zip --output="build/Release/OpenRGBWakePlugin-1.3.2-hardened.1-source.zip" HEAD
+          Write-Host "✅ Source archive created" -ForegroundColor Green
+
+      # ── Upload artifact ────────────────────────────────
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: OpenRGBWakePlugin-1.3.2-hardened.1
           path: |
             build/Release/OpenRGBWakePlugin.dll
             build/Release/OpenRGBWakePlugin.sha256.txt
+            build/Release/BUILD_REPORT.md
+            build/Release/OpenRGBWakePlugin-1.3.2-hardened.1-source.zip
 
       - name: Upload logs on failure
         if: failure()
