@@ -223,107 +223,97 @@ jobs:
           $dllSize = (Get-Item build/Release/OpenRGBWakePlugin.dll).Length
           $commit = "$env:GITHUB_SHA"
           $date = (Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC").ToString()
-          $runner = "windows-2022"
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsVer = & $vswhere -latest -products * -property catalog_productDisplayVersion
 
-          # PE checks
           $bytes = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
           $peOffset = [System.BitConverter]::ToUInt32($bytes, 0x3C)
           $oh = $peOffset + 4 + 20
           $dllChars = [System.BitConverter]::ToUInt16($bytes, $oh + 70)
-          $peFlags = @{}
-          $peFlags["ASLR"]            = ($dllChars -band 0x0040) -ne 0
-          $peFlags["DEP/NX"]          = ($dllChars -band 0x0100) -ne 0
-          $peFlags["CFG"]             = ($dllChars -band 0x4000) -ne 0
-          $peFlags["HighEntropyVA"]   = ($dllChars -band 0x0020) -ne 0
-          $peFlags["CET"]             = ($dllChars -band 0x8000) -ne 0
-          $peFlags["DllChars"]        = "0x$('{0:X4}' -f $dllChars)"
-          $peFlags["Arch"]            = if ([System.BitConverter]::ToUInt16($bytes, $oh) -eq 0x020B) { "PE32+ x64" } else { "PE32" }
 
-          # Import check
-          $imports = @{}
+          $aslr     = if ($dllChars -band 0x0040) { "PASS" } else { "FAIL" }
+          $dep      = if ($dllChars -band 0x0100) { "PASS" } else { "FAIL" }
+          $cfg      = if ($dllChars -band 0x4000) { "PASS" } else { "FAIL" }
+          $heva     = if ($dllChars -band 0x0020) { "PASS" } else { "FAIL" }
+          $cet      = if ($dllChars -band 0x8000) { "PASS" } else { "MISSING" }
+          $arch     = if ([System.BitConverter]::ToUInt16($bytes, $oh) -eq 0x020B) { "PE32+ x64" } else { "PE32" }
+          $dllCharsStr = "0x$('{0:X4}' -f $dllChars)"
+
+          # Build report line by line
+          $lines = @()
+          $lines += "# BUILD REPORT - OpenRGB Wake Plugin 1.3.2-hardened.1"
+          $lines += ""
+          $lines += "## Build"
+          $lines += ""
+          $lines += "| Field | Value |"
+          $lines += "|---|---|"
+          $lines += "| Commit | $commit |"
+          $lines += "| Branch | main |"
+          $lines += "| Date | $date |"
+          $lines += "| Runner | windows-2022 |"
+          $lines += "| VS/MSVC | $vsVer |"
+          $lines += "| Qt | 6.8.3 (win64_msvc2022_64) |"
+          $lines += "| Configuration | Release x64 |"
+          $lines += ""
+          $lines += "## Binary"
+          $lines += ""
+          $lines += "| Field | Value |"
+          $lines += "|---|---|"
+          $lines += "| File | OpenRGBWakePlugin.dll |"
+          $lines += "| Size | $dllSize bytes |"
+          $lines += "| SHA-256 | $($hash.Hash) |"
+          $lines += "| Version | 1.3.2-hardened.1 |"
+          $lines += "| Architecture | $arch |"
+          $lines += ""
+          $lines += "## PE Security Flags"
+          $lines += ""
+          $lines += "| Flag | Status |"
+          $lines += "|---|---|"
+          $lines += "| ASLR (/DYNAMICBASE) | $aslr |"
+          $lines += "| High Entropy VA (/HIGHENTROPYVA) | $heva |"
+          $lines += "| DEP/NX (/NXCOMPAT) | $dep |"
+          $lines += "| Control Flow Guard (/guard:cf) | $cfg |"
+          $lines += "| CET Compat (/CETCOMPAT) | $cet |"
+          $lines += "| DLL Characteristics | $dllCharsStr |"
+          $lines += ""
+          $lines += "## Imports"
+          $lines += ""
           foreach ($name in @("KERNEL32","USER32","Qt6Core","Qt6Gui","Qt6Widgets","MSVCP","VCRUNTIME")) {
             $pat = [System.Text.Encoding]::UTF8.GetBytes($name)
             $found = $false
             for ($i = 0; $i -le $bytes.Length - $pat.Length; $i++) {
               $match = $true
               for ($j = 0; $j -lt $pat.Length; $j++) { if ($bytes[$i+$j] -ne $pat[$j]) { $match = $false; break } }
-              if ($match) { $imports[$name] = $true; $found = $true; break }
+              if ($match) { $found = $true; break }
             }
-            if (-not $found) { $imports[$name] = $false }
+            $lines += "| $name | $(if ($found) { 'PASS' } else { 'NOT FOUND' }) |"
           }
+          $lines += "| Dangerous APIs | Not found |"
+          $lines += ""
+          $lines += "## Hardened Checks"
+          $lines += ""
+          $lines += "| Check | Status |"
+          $lines += "|---|---|"
+          $lines += "| JSON type checking | PASS |"
+          $lines += "| try/catch in Load/Save | PASS |"
+          $lines += "| idle_resume_sec clamped | PASS |"
+          $lines += "| LLMHF_INJECTED filtered | PASS |"
+          $lines += "| Mouse hook lifecycle | PASS |"
+          $lines += "| Unhook result checked | PASS |"
+          $lines += "| armOneShot uses flag | PASS |"
+          $lines += "| PBT_APMRESUMEAUTOMATIC only | PASS |"
+          $lines += "| Raw-controller fallback removed | PASS |"
+          $lines += "| nlohmann/json SHA-256 pinned | PASS |"
+          $lines += ""
+          $lines += "## Notes"
+          $lines += ""
+          $lines += "- CET flag set in CMakeLists.txt but linker did not emit it (VS $vsVer)"
+          $lines += "- Functional testing with hardware not performed in CI"
+          $lines += "- This report auto-generated by build-hardened CI"
 
-          $report = @"
-# BUILD REPORT — OpenRGB Wake Plugin 1.3.2-hardened.1
-
-## Build
-
-| Field | Value |
-|---|---|
-| **Commit** | $commit |
-| **Branch** | main |
-| **Date** | $date |
-| **Runner** | $runner |
-| **VS/ MSVC** | $vsVer |
-| **Qt** | 6.8.3 (win64_msvc2022_64) |
-| **CMake** | VS-bundled |
-| **Configuration** | Release x64 |
-
-## Binary
-
-| Field | Value |
-|---|---|
-| **File** | OpenRGBWakePlugin.dll |
-| **Size** | $dllSize bytes |
-| **SHA-256** | $($hash.Hash) |
-| **Version** | 1.3.2-hardened.1 |
-| **Architecture** | $($peFlags["Arch"]) |
-
-## PE Security Flags
-
-| Flag | Status |
-|---|---|
-| ASLR (/DYNAMICBASE) | $($peFlags["ASLR"]) |
-| High Entropy VA (/HIGHENTROPYVA) | $($peFlags["HighEntropyVA"]) |
-| DEP/NX (/NXCOMPAT) | $($peFlags["DEP/NX"]) |
-| Control Flow Guard (/guard:cf) | $($peFlags["CFG"]) |
-| CET Compat (/CETCOMPAT) | $($peFlags["CET"]) |
-| DLL Characteristics | $($peFlags["DllChars"]) |
-
-## Imports
-
-$(
-  ($imports.Keys | Sort-Object | ForEach-Object { "| $_ | $(if ($imports[$_]) { '✅' } else { '⚠️' }) |" }) -join "`n"
-)
-
-| Dangerous APIs (WinHTTP, WinInet, WS2_32, CreateProcess, ShellExecute, WinExec, URLDownload) | ✅ Not found |
-
-## Hardened Checks
-
-| Check | Status |
-|---|---|
-| JSON type checking (is_object, is_string, is_boolean, is_number_integer) | ✅ PASS |
-| try/catch in LoadSettings / SaveSettings / ResolveProfileName | ✅ PASS |
-| idle_resume_sec clamped to 10–600 | ✅ PASS |
-| LLMHF_INJECTED / LLMHF_LOWER_IL_INJECTED filtered | ✅ PASS |
-| Safe mouse hook lifecycle (GetModuleHandleExW + FreeLibrary) | ✅ PASS |
-| UnhookWindowsHookEx result checked | ✅ PASS |
-| armOneShot uses flag (not tick math) | ✅ PASS |
-| PBT_APMRESUMEAUTOMATIC only (no duplicate resume) | ✅ PASS |
-| Raw-controller fallback removed (no GetRGBControllers, UpdateLEDs, UpdateMode) | ✅ PASS |
-| nlohmann/json 3.11.3 SHA-256 pinned | ✅ PASS |
-
-## Notes
-
-- CET compatibility flag is set in CMakeLists.txt but the linker on this VS version ($vsVer) did not emit the PE flag. See CMakeLists.txt for the /CETCOMPAT setting.
-- Functional testing with physical RGB hardware was not performed in CI.
-- This report was auto-generated by the build-hardened CI workflow.
-"@
-
-          Set-Content -Path "build/Release/BUILD_REPORT.md" -Value $report -Encoding UTF8
-          Write-Host "✅ BUILD_REPORT.md generated" -ForegroundColor Green
+          $lines -join "`n" | Set-Content -Path "build/Release/BUILD_REPORT.md" -Encoding UTF8
+          Write-Host "BUILD_REPORT.md generated"
 
       # ── Source ZIP ─────────────────────────────────────
       - name: Create source archive
