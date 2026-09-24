@@ -36,7 +36,10 @@ bool PowerWatcher::nativeEventFilter(const QByteArray& eventType, void* message,
     MSG* msg = static_cast<MSG*>(message);
     if (msg && (msg->message == WM_POWERBROADCAST))
     {
-        if ((msg->wParam == PBT_APMRESUMESUSPEND) || (msg->wParam == PBT_APMRESUMEAUTOMATIC))
+        /* Windows sends PBT_APMRESUMEAUTOMATIC for every normal resume.
+           A user-driven wake may then also receive PBT_APMRESUMESUSPEND;
+           handling both would execute the restore path twice. */
+        if (msg->wParam == PBT_APMRESUMEAUTOMATIC)
         {
             if (on_resume)
             {
@@ -50,6 +53,5 @@ bool PowerWatcher::nativeEventFilter(const QByteArray& eventType, void* message,
     (void)result;
 #endif
 
-    /* Never swallow the message */
     return false;
 }

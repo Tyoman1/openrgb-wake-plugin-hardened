@@ -2,11 +2,11 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QObject>
-
 #include <functional>
 
-/* Watches for the PC resuming from sleep and fires on_resume.            */
-/* On Windows this catches WM_POWERBROADCAST PBT_APMRESUME* messages.    */
+/* Watches for the PC resuming from sleep and fires on_resume.
+   On Windows the hardened implementation uses PBT_APMRESUMEAUTOMATIC only,
+   avoiding the normal AUTOMATIC -> RESUMESUSPEND duplicate notification. */
 class PowerWatcher : public QObject, public QAbstractNativeEventFilter
 {
     Q_OBJECT

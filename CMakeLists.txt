@@ -8,11 +8,11 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
-# The OpenRGB plugin SDK headers include nlohmann/json
 include(FetchContent)
 FetchContent_Declare(
     nlohmann_json
     URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+    URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
@@ -38,13 +38,22 @@ target_link_libraries(OpenRGBWakePlugin PRIVATE
     nlohmann_json::nlohmann_json
 )
 
-# Produce "OpenRGBWakePlugin.dll" (no lib/ prefix)
 set_target_properties(OpenRGBWakePlugin PROPERTIES
     PREFIX ""
     OUTPUT_NAME "OpenRGBWakePlugin"
 )
 
-# Russian strings in the settings widget need explicit UTF-8 on MSVC
 if(MSVC)
-    target_compile_options(OpenRGBWakePlugin PRIVATE /utf-8)
+    target_compile_options(OpenRGBWakePlugin PRIVATE
+        /utf-8
+        /guard:cf
+        /sdl
+    )
+    target_link_options(OpenRGBWakePlugin PRIVATE
+        /guard:cf
+        /CETCOMPAT
+        /DYNAMICBASE
+        /NXCOMPAT
+        /HIGHENTROPYVA
+    )
 endif()
