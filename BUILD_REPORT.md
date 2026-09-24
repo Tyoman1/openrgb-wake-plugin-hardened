@@ -192,7 +192,7 @@ DLL не должна неожиданно импортировать:
 
 | Артефакт | SHA-256 |
 |---|---|
-| `OpenRGBWakePlugin-1.3.2-hardened.1-final-source.zip` | `C3167A1737D880BBE68353955FD39F4DC6407DBC7FCED619E212E15B6B04D904` |
+| `OpenRGBWakePlugin-1.3.2-hardened.1-final-source.zip` | `FDF5F8F2F33EE6A7955E72E610C72F98EBE8643A1E9DCAAA4CB343CCE7ED551C` |
 | `OpenRGBWakePlugin.dll` | Вычисляется CI на шаге SHA256 |
 
 ---
