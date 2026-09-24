@@ -183,58 +183,49 @@ jobs:
           $cfg  = ($dllChars -band 0x4000) -ne 0
           $heva = ($dllChars -band 0x0020) -ne 0
 
-          # CET: look for IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS
-          # Debug directory follows the data directories (16 entries, each 8 bytes)
-          $numDirEntries = [System.BitConverter]::ToUInt32($bytes, $oh + 108)
-          $dataDirOffset = $oh + 112  # first data dir for PE32+
-          $debugDirRVA   = 0; $debugDirSize = 0
-          for ($i = 0; $i -lt 6 -and $i -lt $numDirEntries; $i++) {
-            $rva = [System.BitConverter]::ToUInt32($bytes, $dataDirOffset + $i * 8)
-            $sz  = [System.BitConverter]::ToUInt32($bytes, $dataDirOffset + $i * 8 + 4)
-            if ($i -eq 6) { $debugDirRVA = $rva; $debugDirSize = $sz }  # IMAGE_DIRECTORY_ENTRY_DEBUG = 6
-          }
+          # CET: IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS = 20
+          $debugDirRVA  = [System.BitConverter]::ToUInt32($bytes, $dataDirOffset + 6 * 8)
+          $debugDirSize = [System.BitConverter]::ToUInt32($bytes, $dataDirOffset + 6 * 8 + 4)
 
-          # If we didn't get it via index, also scan (6 is the debug directory)
-          $debugDirRVA   = [System.BitConverter]::ToUInt32($bytes, $dataDirOffset + 6 * 8)
-          $debugDirSize  = [System.BitConverter]::ToUInt32($bytes, $dataDirOffset + 6 * 8 + 4)
-
-          # Convert RVA to file offset using section headers
+          # Convert RVA to file offset
           $fh = $peOffset + 4
           $numSec = [System.BitConverter]::ToUInt16($bytes, $fh + 2)
           $optHdrSz = [System.BitConverter]::ToUInt16($bytes, $fh + 16)
           $secOff = $fh + 20 + $optHdrSz
 
-          function RvaToOffset($rva) {
-            param($rva, $bytes, $secOff, $numSec)
-            for ($i = 0; $i -lt $numSec; $i++) {
-              $so = $secOff + $i * 40
-              $secVA  = [System.BitConverter]::ToUInt32($bytes, $so + 12)
-              $secRaw = [System.BitConverter]::ToUInt32($bytes, $so + 20)
-              $secSz  = [System.BitConverter]::ToUInt32($bytes, $so + 16)
-              if ($rva -ge $secVA -and $rva -lt ($secVA + $secSz)) {
-                return $rva - $secVA + $secRaw
-              }
+          $debugOff = 0
+          for ($i = 0; $i -lt $numSec; $i++) {
+            $so = $secOff + $i * 40
+            $secVA  = [System.BitConverter]::ToUInt32($bytes, $so + 12)
+            $secRaw = [System.BitConverter]::ToUInt32($bytes, $so + 20)
+            $secSz  = [System.BitConverter]::ToUInt32($bytes, $so + 16)
+            if ($debugDirRVA -ge $secVA -and $debugDirRVA -lt ($secVA + $secSz)) {
+              $debugOff = $debugDirRVA - $secVA + $secRaw
             }
-            return 0
           }
 
-          $debugOff = RvaToOffset $debugDirRVA $bytes $secOff $numSec
           $cet = $false
-
           if ($debugOff -gt 0 -and $debugDirSize -gt 0) {
-            $numDebugEntries = [int]($debugDirSize / 28)  # each IMAGE_DEBUG_DIRECTORY is 28 bytes
+            $numDebugEntries = [int]($debugDirSize / 28)
             for ($i = 0; $i -lt $numDebugEntries; $i++) {
               $entryOff = $debugOff + $i * 28
               $debugType = [System.BitConverter]::ToUInt32($bytes, $entryOff + 12)
-              if ($debugType -eq 20) {  # IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS = 20
+              if ($debugType -eq 20) {
                 $dataRVA  = [System.BitConverter]::ToUInt32($bytes, $entryOff + 20)
                 $dataSize = [System.BitConverter]::ToUInt32($bytes, $entryOff + 24)
-                $dataOff  = RvaToOffset $dataRVA $bytes $secOff $numSec
+                $dataOff = 0
+                for ($s = 0; $s -lt $numSec; $s++) {
+                  $so = $secOff + $s * 40
+                  $secVA  = [System.BitConverter]::ToUInt32($bytes, $so + 12)
+                  $secRaw = [System.BitConverter]::ToUInt32($bytes, $so + 20)
+                  $secSz  = [System.BitConverter]::ToUInt32($bytes, $so + 16)
+                  if ($dataRVA -ge $secVA -and $dataRVA -lt ($secVA + $secSz)) {
+                    $dataOff = $dataRVA - $secVA + $secRaw
+                  }
+                }
                 if ($dataOff -gt 0 -and $dataSize -ge 2) {
                   $exChars = [System.BitConverter]::ToUInt16($bytes, $dataOff)
-                  if ($exChars -band 0x0001) {  # IMAGE_DLLCHARACTERISTICS_EX_CET_COMPAT
-                    $cet = $true
-                  }
+                  if ($exChars -band 0x0001) { $cet = $true }
                 }
                 break
               }
