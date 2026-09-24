@@ -49,7 +49,16 @@ jobs:
             $errors += "Version is not 1.3.2-hardened.1"
           }
 
-          # 2. No raw-controller fallback
+          # 2. URL must be hardened repo
+          if ($src -notmatch 'openrgb-wake-plugin-hardened') {
+            $errors += "Plugin URL does not point to hardened repo"
+          }
+          $meta = Get-Content src/OpenRGBWakePlugin.json -Raw
+          if ($meta -notmatch 'openrgb-wake-plugin-hardened') {
+            $errors += "Metadata JSON URL does not point to hardened repo"
+          }
+
+          # 3. No raw-controller fallback
           if ($src -match 'GetRGBControllers\(') {
             $errors += "GetRGBControllers() found in WakePlugin.cpp"
           }
@@ -57,23 +66,23 @@ jobs:
             $errors += "Old fallback message found"
           }
 
-          # 3. JSON type checking
+          # 4. JSON type checking
           if ($src -notmatch 'is_object|is_string|is_boolean|is_number_integer') {
             $errors += "JSON type checking missing"
           }
 
-          # 4. try/catch
+          # 5. try/catch
           $tryCount = [regex]::Matches($src, 'try\s*\{').Count
           if ($tryCount -lt 3) {
             $errors += "Insufficient try/catch blocks ($tryCount, expected ≥3)"
           }
 
-          # 5. idle clamp
+          # 6. idle clamp
           if ($src -notmatch 'std::clamp') {
             $errors += "idle_resume_sec std::clamp missing"
           }
 
-          # 6. Injection filter
+          # 7. Injection filter
           $mouseSrc = Get-Content src/MouseActivityWatcher.cpp -Raw
           if ($mouseSrc -notmatch 'LLMHF_INJECTED') {
             $errors += "LLMHF_INJECTED filter missing in MouseActivityWatcher.cpp"
@@ -82,7 +91,7 @@ jobs:
             $errors += "LLMHF_LOWER_IL_INJECTED filter missing"
           }
 
-          # 7. FreeLibrary lifecycle
+          # 8. FreeLibrary lifecycle
           if ($mouseSrc -notmatch 'FreeLibrary') {
             $errors += "FreeLibrary not found in mouse hook lifecycle"
           }
@@ -139,6 +148,14 @@ jobs:
             exit 1
           } else {
             Write-Host "::error::Could not verify DLL version"
+            exit 1
+          }
+
+          # Also verify the URL metadata in the DLL points to the hardened repo
+          if ($text -match 'openrgb-wake-plugin-hardened') {
+            Write-Host "✅ DLL URL points to hardened repo" -ForegroundColor Green
+          } else {
+            Write-Host "::error::DLL URL does not point to hardened repo"
             exit 1
           }
 
@@ -250,6 +267,7 @@ jobs:
           $lines += "|---|---|"
           $lines += "| Commit | $commit |"
           $lines += "| Branch | main |"
+          $lines += "| Repository | https://github.com/Tyoman1/openrgb-wake-plugin-hardened |"
           $lines += "| Date | $date |"
           $lines += "| Runner | windows-2022 |"
           $lines += "| VS/MSVC | $vsVer |"
