@@ -288,13 +288,23 @@ jobs:
       - name: Generate BUILD_REPORT.md
         shell: pwsh
         run: |
-          $hash   = Get-FileHash build/Release/OpenRGBWakePlugin.dll -Algorithm SHA256
-          $size   = (Get-Item build/Release/OpenRGBWakePlugin.dll).Length
-          $sha    = $hash.Hash
+          $hash = Get-FileHash build/Release/OpenRGBWakePlugin.dll -Algorithm SHA256
+          $size = (Get-Item build/Release/OpenRGBWakePlugin.dll).Length
           $commit = "$env:GITHUB_SHA"
           $branch = "$env:GITHUB_REF_NAME"
           $runId  = "$env:GITHUB_RUN_ID"
           $repo   = "$env:GITHUB_REPOSITORY"
+
+          # Pre-compute complex values
+          $pyVer = & python --version 2>&1
+          $aqtVer = & python -m pip show aqtinstall 2>&1 | Select-String '^Version:' | ForEach-Object { ($_ -replace '^Version:\s*', '').Trim() }
+
+          $aslr  = if ("$env:PE_ASLR" -eq "True") { "PASS" } else { "FAIL" }
+          $heva  = if ("$env:PE_HEVA" -eq "True") { "PASS" } else { "FAIL" }
+          $dep   = if ("$env:PE_DEP" -eq "True") { "PASS" } else { "FAIL" }
+          $cfg   = if ("$env:PE_CFG" -eq "True") { "PASS" } else { "FAIL" }
+          $cet   = if ("$env:PE_CET" -eq "True") { "PASS" } else { "FAIL" }
+          $gs    = if ("$env:PE_GS" -eq "True") { "PASS" } else { "INFO: not visible (Release)" }
 
           $lines = @()
           $lines += "# BUILD REPORT - OpenRGB Wake Plugin 1.3.2-hardened.1"
@@ -314,8 +324,8 @@ jobs:
           $lines += "| MSVC | $env:VS_VER |"
           $lines += "| CMake | $env:CMAKE_VER |"
           $lines += "| Qt | 6.8.3 (win64_msvc2022_64) |"
-          $lines += "| Python | $(python --version 2>&1) |"
-          $lines += "| aqtinstall | $(python -m pip show aqtinstall 2>&1 | Select-String '^Version:' | ForEach-Object { $_ -replace '^Version:\s*', '' }) |"
+          $lines += "| Python | $pyVer |"
+          $lines += "| aqtinstall | $aqtVer |"
           $lines += "| Configuration | Release x64 |"
           $lines += ""
           $lines += "## Binary"
@@ -323,19 +333,19 @@ jobs:
           $lines += "|---|---|"
           $lines += "| File | OpenRGBWakePlugin.dll |"
           $lines += "| Size | $size bytes |"
-          $lines += "| SHA-256 | $sha |"
+          $lines += "| SHA-256 | $($hash.Hash) |"
           $lines += "| Version | 1.3.2-hardened.1 |"
           $lines += "| Architecture | $env:PE_ARCH |"
           $lines += ""
           $lines += "## PE Security Flags"
           $lines += "| Flag | Status |"
           $lines += "|---|---|"
-          $lines += "| ASLR (/DYNAMICBASE) | $(if ($env:PE_ASLR -eq 'True') { 'PASS' } else { 'FAIL' }) |"
-          $lines += "| High Entropy VA (/HIGHENTROPYVA) | $(if ($env:PE_HEVA -eq 'True') { 'PASS' } else { 'FAIL' }) |"
-          $lines += "| DEP/NX (/NXCOMPAT) | $(if ($env:PE_DEP -eq 'True') { 'PASS' } else { 'FAIL' }) |"
-          $lines += "| Control Flow Guard (/guard:cf) | $(if ($env:PE_CFG -eq 'True') { 'PASS' } else { 'FAIL' }) |"
-          $lines += "| CET Compat (/CETCOMPAT) | $(if ($env:PE_CET -eq 'True') { 'PASS' } else { 'FAIL' }) |"
-          $lines += "| GS Security Cookie | $(if ($env:PE_GS -eq 'True') { 'PASS' } else { 'INFO: not visible (Release)') } |"
+          $lines += "| ASLR (/DYNAMICBASE) | $aslr |"
+          $lines += "| High Entropy VA (/HIGHENTROPYVA) | $heva |"
+          $lines += "| DEP/NX (/NXCOMPAT) | $dep |"
+          $lines += "| Control Flow Guard (/guard:cf) | $cfg |"
+          $lines += "| CET Compat (/CETCOMPAT) | $cet |"
+          $lines += "| GS Security Cookie | $gs |"
           $lines += "| DLL Characteristics | $env:PE_DLLCHARS |"
           $lines += ""
           $lines += "## Source Hardening Checks"
@@ -357,31 +367,24 @@ jobs:
           $lines += "## Imports"
           $lines += "| DLL | Status |"
           $lines += "|---|---|"
+          $dllBytes = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
+          function FindInDll($name) {
+            $pat = [System.Text.Encoding]::UTF8.GetBytes($name)
+            for ($i = 0; $i -le $dllBytes.Length - $pat.Length; $i++) {
+              $match = $true
+              for ($j = 0; $j -lt $pat.Length; $j++) { if ($dllBytes[$i+$j] -ne $pat[$j]) { $match = $false; break } }
+              if ($match) { return $true }
+            }
+            return $false
+          }
           foreach ($n in @("KERNEL32","USER32","Qt6Core","Qt6Gui","Qt6Widgets","MSVCP","VCRUNTIME")) {
-            $pat = [System.Text.Encoding]::UTF8.GetBytes($n)
-            $found = $false
-            $b = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
-            for ($i = 0; $i -le $b.Length - $pat.Length; $i++) {
-              $match = $true
-              for ($j = 0; $j -lt $pat.Length; $j++) { if ($b[$i+$j] -ne $pat[$j]) { $match = $false; break } }
-              if ($match) { $found = $true; break }
-            }
-            $lines += "| $n | $(if ($found) { 'OK' } else { 'NOT FOUND' }) |"
+            $f = FindInDll $n
+            $lines += "| $n | $(if ($f) { 'OK' } else { 'NOT FOUND' }) |"
           }
-          $dangerChecks = @("WinHTTP","WinInet","WS2_32","CreateProcess","ShellExecute","WinExec","URLDownloadToFile","VirtualAlloc","VirtualProtect")
-          $allDangerOk = $true
-          foreach ($n in $dangerChecks) {
-            $pat = [System.Text.Encoding]::UTF8.GetBytes($n)
-            $found = $false
-            $b = [System.IO.File]::ReadAllBytes("build/Release/OpenRGBWakePlugin.dll")
-            for ($i = 0; $i -le $b.Length - $pat.Length; $i++) {
-              $match = $true
-              for ($j = 0; $j -lt $pat.Length; $j++) { if ($b[$i+$j] -ne $pat[$j]) { $match = $false; break } }
-              if ($match) { $found = $true; break }
-            }
-            if ($found) { $allDangerOk = $false }
-          }
-          $lines += "| Dangerous APIs | $(if ($allDangerOk) { 'None' } else { 'FOUND (see above)' }) |"
+          $dangerList = @("WinHTTP","WinInet","WS2_32","CreateProcess","ShellExecute","WinExec","URLDownloadToFile","VirtualAlloc","VirtualProtect")
+          $dangerOk = $true
+          foreach ($n in $dangerList) { if (FindInDll $n) { $dangerOk = $false } }
+          $lines += "| Dangerous APIs | $(if ($dangerOk) { 'None' } else { 'FOUND' }) |"
           $lines += ""
           $lines += "## Notes"
           $lines += "- Auto-generated by build-hardened CI workflow"
