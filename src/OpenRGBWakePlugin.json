@@ -4,5 +4,5 @@
     "Name": "OpenRGB Wake Plugin",
     "Description": "Loads the configured OpenRGB profile when a wireless device wakes or the PC resumes",
     "VersionStr": "1.3.2-hardened.1",
-    "Url": "https://github.com/Tyoman1/openrgb-wake-plugin"
+    "Url": "https://github.com/Tyoman1/openrgb-wake-plugin-hardened"
 }

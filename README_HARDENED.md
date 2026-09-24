@@ -2,6 +2,8 @@
 
 Неофициальная hardened-версия исходного `Tyoman1/openrgb-wake-plugin` 1.3.2.
 
+Репозиторий: https://github.com/Tyoman1/openrgb-wake-plugin-hardened
+
 ## Что уже включено
 
 - Безопасное чтение JSON с проверкой типов и обработкой исключений.

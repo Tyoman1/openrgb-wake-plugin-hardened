@@ -49,7 +49,7 @@ OpenRGBPluginInfo WakePlugin::GetPluginInfo()
     info.Description     = "Loads the configured OpenRGB profile when a wireless device wakes or the PC resumes";
     info.Version         = "1.3.2-hardened.1";
     info.Commit          = "";
-    info.URL             = "https://github.com/Tyoman1/openrgb-wake-plugin";
+    info.URL             = "https://github.com/Tyoman1/openrgb-wake-plugin-hardened";
     info.Icon            = QImage();
     info.Location        = OPENRGB_PLUGIN_LOCATION_SETTINGS;
     info.Label           = "Wake Plugin";
