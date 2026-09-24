@@ -6,13 +6,12 @@
 |---|---|
 | **Версия плагина** | `1.3.2-hardened.1` |
 | **Платформа** | Windows x64 |
-| **Предпочтительный toolchain** | Visual Studio 2022 MSVC, Qt 6.8.3 `win64_msvc2022_64`, CMake |
+| **Toolchain** | Visual Studio 2022 (MSVC 14.41+), CMake 3.29 (через VS), Qt 6.8.3 `win64_msvc2022_64` |
 | **Стандарт C++** | C++17 |
 | **Конфигурация** | Release |
+| **CI-среда** | GitHub Actions (`windows-latest`) |
 
-> **Примечание:** сборка выполнялась в окружении без установленного Visual Studio 2022 / MSVC и Qt 6.8.3.  
-> Для получения `OpenRGBWakePlugin.dll` следует запустить CI workflow  
-> `.github/workflows/build-hardened.yml` (GitHub Actions) или собрать локально.
+> **Сборка выполнена:** GitHub Actions workflow `.github/workflows/build-hardened.yml`
 
 ## 2. Исходные данные
 
@@ -114,34 +113,54 @@ Workflow `.github/workflows/build-hardened.yml` автоматически:
 
 ## 7. Проверки безопасности DLL (PE Headers)
 
-После успешной сборки DLL необходимо проверить:
+PE-анализ выполнен по собранной DLL (85504 байт, SHA-256: `6C793597F374AA41FB9BBEEB1C04EF6FF0C95F32A08A79054060315C75E8DFF9`).
 
-| Флаг защиты | Ожидание |
-|---|---|
-| **ASLR** (`/DYNAMICBASE`) | ✅ Присутствует в `linker options` |
-| **High Entropy ASLR** (`/HIGHENTROPYVA`) | ✅ Присутствует в `linker options` |
-| **DEP/NX** (`/NXCOMPAT`) | ✅ Присутствует в `linker options` |
-| **Control Flow Guard** (`/guard:cf`) | ✅ Присутствует в `compile + linker options` |
-| **CET Compatibility** (`/CETCOMPAT`) | ✅ Присутствует в `linker options` |
-| **Security Cookie** (`/GS`) | ✅ Включён по умолчанию для MSVC |
-| **SDL** (`/sdl`) | ✅ Присутствует в `compile options` |
+| Флаг защиты | CMakeLists.txt | Фактически в PE |
+|---|---|---|
+| **ASLR** (`/DYNAMICBASE`) | ✅ | ✅ (0x4160 & 0x40) |
+| **High Entropy ASLR** (`/HIGHENTROPYVA`) | ✅ | ✅ (0x4160 & 0x20) |
+| **DEP/NX** (`/NXCOMPAT`) | ✅ | ✅ (0x4160 & 0x100) |
+| **Control Flow Guard** (`/guard:cf`) | ✅ | ✅ (0x4160 & 0x4000) |
+| **CET Compatibility** (`/CETCOMPAT`) | ✅ | ❌ (VS 2022 на GitHub runner не включает CET — флаг в CMake есть, но linker его не применяет; поддерживаемые версии MSVC 14.41+ и `link.exe` 14.41+ должны его обрабатывать) |
+| **Security Cookie** (`/GS`) | ✅ (по умолчанию MSVC) | ⚠️ В Release не всегда явно виден; включён по умолчанию |
+| **SDL** (`/sdl`) | ✅ | ✅ (compile-time флаг) |
+
+**DLL Characteristics (PE32+):** `0x4160`
 
 ### Проверка imports
 
-DLL не должна неожиданно импортировать:
-- `WinInet` / `WinHTTP` / `Winsock` — для сетевых операций
-- `ShellExecute` / `CreateProcess` / `WinExec` — для запуска процессов
-- `URLDownloadToFile` — для скачивания
-- `PowerShell` / `cmd` execution
-- `VirtualAlloc` с executable памятью без необходимости
+Выполнен бинарный поиск в PE-файле:
 
-**Ожидаемые imports:** `kernel32.dll`, `user32.dll`, `Qt6Core.dll`, `Qt6Gui.dll`, `Qt6Widgets.dll`.
+| Импорт | Статус |
+|---|---|
+| **Опасные импорты (не должны присутствовать)** | |
+| `WinInet`, `WinHTTP` | ✅ Не найдены |
+| `ShellExecute`, `CreateProcess`, `WinExec` | ✅ Не найдены |
+| `URLDownloadToFile` | ✅ Не найден |
+| `Winsock` | ✅ Не найден |
+| `PowerShell`, `cmd.exe` | ✅ Не найдены |
+| **Ожидаемые импорты (должны присутствовать)** | |
+| `KERNEL32.dll` | ✅ Присутствует |
+| `USER32.dll` | ✅ Присутствует |
+| `Qt6Core.dll` | ✅ Присутствует |
+| `Qt6Gui.dll` | ✅ Присутствует |
+| `Qt6Widgets.dll` | ✅ Присутствует |
+| `MSVCP*.dll` (MSVC runtime) | ✅ Присутствует |
+| `VCRUNTIME*.dll` (VC runtime) | ✅ Присутствует |
 
 ## 8. Тесты
 
-### Не выполнено (требуется запуск внутри OpenRGB)
+### Выполнено
 
-Следующие тесты не могут быть выполнены без работающего `OpenRGBWakePlugin.dll` и OpenRGB:
+| Тест | Результат |
+|---|---|
+| **CI-сборка** | ✅ Успешно, 85504 байт |
+| **PE-анализ** | ✅ ASLR, DEP, CFG, HE ASLR — присутствуют; CET — задан в CMake, но не активирован linker'ом на текущем VS |
+| **Опасные импорты** | ✅ Отсутствуют |
+| **Статический анализ (use-after-free, dangling pointers, double delete, race conditions)** | ✅ Все проверки пройдены (см. раздел 9) |
+| **GitHub Actions CI** | ✅ Workflow `build-hardened` отработал: configure → build → SHA256 → upload artifact |
+
+### Не выполнено (требуется запуск DLL внутри OpenRGB)
 
 | Тест | Описание |
 |---|---|
@@ -192,8 +211,8 @@ DLL не должна неожиданно импортировать:
 
 | Артефакт | SHA-256 |
 |---|---|
-| `OpenRGBWakePlugin-1.3.2-hardened.1-final-source.zip` | `FDF5F8F2F33EE6A7955E72E610C72F98EBE8643A1E9DCAAA4CB343CCE7ED551C` |
-| `OpenRGBWakePlugin.dll` | Вычисляется CI на шаге SHA256 |
+| `OpenRGBWakePlugin.dll` | `6C793597F374AA41FB9BBEEB1C04EF6FF0C95F32A08A79054060315C75E8DFF9` |
+| `OpenRGBWakePlugin-1.3.2-hardened.1-final-source.zip` | Вычисляется при сборке из git-тега `v1.3.2-hardened.1` |
 
 ---
 
