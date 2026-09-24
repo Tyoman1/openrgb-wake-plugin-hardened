@@ -48,6 +48,7 @@ if(MSVC)
         /utf-8
         /guard:cf
         /sdl
+        /CETCOMPAT
     )
     target_link_options(OpenRGBWakePlugin PRIVATE
         /guard:cf
@@ -55,5 +56,10 @@ if(MSVC)
         /DYNAMICBASE
         /NXCOMPAT
         /HIGHENTROPYVA
+    )
+
+    # Also try the cmake-native CET property if available
+    set_target_properties(OpenRGBWakePlugin PROPERTIES
+        VS_CET_COMPATIBLE ON
     )
 endif()
