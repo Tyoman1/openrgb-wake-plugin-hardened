@@ -34,12 +34,41 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B build -A x64 "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR"
+          $ErrorActionPreference = 'Continue'
+
+          # Collect the Visual Studio generator names this CMake knows, newest first
+          $gens = @()
+          $helpOut = (& cmake --help 2>&1) | Out-String
+          foreach ($m in [regex]::Matches($helpOut, 'Visual Studio \d+ \d{4}')) {
+            if ($gens -notcontains $m.Value) { $gens += $m.Value }
+          }
+          [array]::Reverse($gens)
+          Write-Host "candidate generators: $($gens -join ', ')"
+
+          $configured = $false
+          foreach ($gen in $gens) {
+            if (Test-Path build) { Remove-Item -Recurse -Force build }
+            $out = & cmake -S . -B build -G $gen -A x64 "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR" 2>&1 | Out-String
+            Write-Host "--- generator: $gen ---"
+            Write-Host $out
+            if ($LASTEXITCODE -eq 0) { $configured = $true; "configured with $gen" | Set-Content configure.log; break }
+          }
+
+          if (-not $configured) {
+            if (Test-Path build) { Remove-Item -Recurse -Force build }
+            $out = & cmake -S . -B build "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR" 2>&1 | Out-String
+            Write-Host "--- default generator ---"
+            Write-Host $out
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error title=CMake configure failed::$((($out -split '\r?\n') | Where-Object { $_ } | Select-Object -Last 12) -join ' | ')"; exit 1 }
+          }
 
       - name: Build
         shell: pwsh
         run: |
-          cmake --build build --config Release --parallel 4
+          $out = & cmake --build build --config Release --parallel 4 2>&1 | Out-String
+          Write-Host $out
+          $out | Set-Content -Path build.log
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error title=Compile failed::$((($out -split '\r?\n') | Where-Object { $_ } | Select-Object -Last 40) -join ' | ')"; exit 1 }
 
       - name: SHA256
         shell: pwsh
@@ -55,3 +84,11 @@ jobs:
           path: |
             build/Release/OpenRGBWakePlugin.dll
             build/Release/OpenRGBWakePlugin.sha256.txt
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: "*.log"
+          if-no-files-found: ignore
