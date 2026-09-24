@@ -184,7 +184,6 @@ jobs:
 
           # Helper: RVA to file offset
           function RvaToRaw($rva) {
-            param($rva)
             for ($i = 0; $i -lt $numSec; $i++) {
               $so = $secOff + $i * 40
               $secVA  = [System.BitConverter]::ToUInt32($bytes, $so + 12)
