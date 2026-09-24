@@ -1,4 +1,4 @@
-# Build output
+﻿# Build output
 build/
 out/
 cmake-build-*/
@@ -15,3 +15,6 @@ cmake-build-*/
 
 # Logs
 *.log
+BUILD_REPORT.md
+OpenRGBWakePlugin.sha256.txt
+.github/workflows/build.yml
