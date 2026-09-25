@@ -44,6 +44,8 @@ private:
     bool        ApplyTargets(const char* reason, bool resume_trigger = false);
     std::string ResolveProfileName(bool resume_trigger);
     void        ApplyStartup();
+    void        ScheduleDetectionRestore(int delay_ms, const char* reason);
+    void        OnDetectionRestore(const char* reason);
     void        LoadSettings();
     void        SaveSettings();
     void        Log(const char* msg, unsigned int level = 2);
@@ -59,5 +61,11 @@ private:
     bool log_enabled_             = true;
 
     bool last_restore_ok_      = true;
-    int  startup_retries_left_ = 5;
+
+    /* Startup window: the plugin actively tries to restore profile
+       during the first ~30 seconds after Load(), even if LoadProfile
+       returns true early (the device may not be ready yet). */
+    bool startup_restore_pending_    = true;
+    bool startup_restore_scheduled_  = false;
+    int  startup_retries_left_       = 5;
 };

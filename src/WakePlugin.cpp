@@ -32,6 +32,14 @@ namespace
 {
 constexpr int kMinIdleResumeSec = 10;
 constexpr int kMaxIdleResumeSec = 600;
+
+/* Startup window: how long (ms) after Load() the plugin should keep
+   watching ResourceManager events and retrying the profile restore. */
+constexpr int kStartupWindowMs    = 30000;
+
+/* Debounce delays after detection / device-list changes */
+constexpr int kDetectionDebounceMs  = 750;
+constexpr int kDetectionRetryMs     = 2500;
 }
 
 WakePlugin::WakePlugin()
@@ -42,6 +50,9 @@ WakePlugin::~WakePlugin()
 {
 }
 
+/*---------------------------------------------------------*\
+| Plugin Information                                        |
+\*---------------------------------------------------------*/
 OpenRGBPluginInfo WakePlugin::GetPluginInfo()
 {
     OpenRGBPluginInfo info;
@@ -64,6 +75,9 @@ unsigned int WakePlugin::GetPluginAPIVersion()
     return OPENRGB_PLUGIN_API_VERSION;
 }
 
+/*---------------------------------------------------------*\
+| Plugin Lifecycle                                          |
+\*---------------------------------------------------------*/
 void WakePlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
 {
     api_ = plugin_api_ptr;
@@ -90,6 +104,8 @@ void WakePlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
 
     connect(mouse_watcher_, &MouseActivityWatcher::mouseResumed, this, [this]()
     {
+        /* Mouse wake applies profile, but during the startup window
+           a later detection-complete apply may still follow. */
         QTimer::singleShot(700, this, [this]()
         {
             ApplyTargets("mouse activity");
@@ -114,12 +130,15 @@ void WakePlugin::Load(OpenRGBPluginAPIInterface* plugin_api_ptr)
         }
     }
 
+    /* ── Initial startup attempt ── */
     QTimer::singleShot(2000, this, [this]()
     {
+        /* This is the first quick attempt; the startup window keeps
+           working even if this returns true — see ApplyStartup(). */
         ApplyStartup();
     });
 
-    Log("Plugin loaded");
+    Log("Plugin loaded; startup window active for 30 s");
 }
 
 QWidget* WakePlugin::GetWidget()
@@ -134,6 +153,9 @@ QMenu* WakePlugin::GetTrayMenu()
 
 void WakePlugin::Unload()
 {
+    /* Close the startup window immediately so no more callbacks fire */
+    startup_restore_pending_ = false;
+
     if (mouse_watcher_)
     {
         if (!mouse_watcher_->stop())
@@ -155,6 +177,9 @@ void WakePlugin::Unload()
     api_ = nullptr;
 }
 
+/*---------------------------------------------------------*\
+| Profile / SDK Interface                                   |
+\*---------------------------------------------------------*/
 void WakePlugin::OnProfileAboutToLoad()
 {
 }
@@ -175,18 +200,46 @@ unsigned char* WakePlugin::OnSDKCommand(unsigned int /* pkt_id */,
     return nullptr;
 }
 
+/*---------------------------------------------------------*\
+| Update Signals                                            |
+\*---------------------------------------------------------*/
 void WakePlugin::ProfileManagerUpdated(unsigned int /* update_reason */)
 {
 }
 
-void WakePlugin::ResourceManagerUpdated(unsigned int /* update_reason */)
+void WakePlugin::ResourceManagerUpdated(unsigned int update_reason)
 {
+    if (!startup_restore_pending_)
+        return;
+
+    if (update_reason == RESOURCEMANAGER_UPDATE_REASON_DETECTION_COMPLETE)
+    {
+        Log("Startup: detection complete received", LOG_LEVEL_INFO);
+
+        /* Debounced: wait for firmware to stabilise */
+        ScheduleDetectionRestore(kDetectionDebounceMs,
+                                 "startup detection complete");
+
+        /* Also schedule a later retry for devices that need more time */
+        ScheduleDetectionRestore(kDetectionRetryMs,
+                                 "startup detection retry");
+    }
+    else if (update_reason == RESOURCEMANAGER_UPDATE_REASON_DEVICE_LIST_UPDATED)
+    {
+        /* During startup, device list changes may indicate a late-arriving device */
+        Log("Startup: device list updated during startup window", LOG_LEVEL_INFO);
+        ScheduleDetectionRestore(kDetectionDebounceMs,
+                                 "startup device list updated");
+    }
 }
 
 void WakePlugin::SettingsManagerUpdated(unsigned int /* update_reason */)
 {
 }
 
+/*---------------------------------------------------------*\
+| Event Handlers                                            |
+\*---------------------------------------------------------*/
 void WakePlugin::OnPowerResume()
 {
     if (!reapply_on_wake_)
@@ -245,6 +298,9 @@ void WakePlugin::SettingsChanged()
     Log("Settings saved");
 }
 
+/*---------------------------------------------------------*\
+| Profile Name Resolution                                   |
+\*---------------------------------------------------------*/
 std::string WakePlugin::ResolveProfileName(bool resume_trigger)
 {
     if (!api_)
@@ -318,6 +374,9 @@ std::string WakePlugin::ResolveProfileName(bool resume_trigger)
     return "";
 }
 
+/*---------------------------------------------------------*\
+| Profile Restore                                            |
+\*---------------------------------------------------------*/
 bool WakePlugin::ApplyTargets(const char* reason, bool resume_trigger)
 {
     if (!api_)
@@ -389,12 +448,44 @@ bool WakePlugin::ApplyTargets(const char* reason, bool resume_trigger)
     return loaded;
 }
 
+/*---------------------------------------------------------*\
+| Startup helpers                                            |
+\*---------------------------------------------------------*/
+
+/* Schedule a delayed apply within the startup window.
+   Multiple calls with the same reason are coalesced:
+   only the latest timer matters. */
+void WakePlugin::ScheduleDetectionRestore(int delay_ms, const char* reason)
+{
+    if (!startup_restore_pending_)
+        return;
+
+    /* Keep the string alive for the lambda */
+    QString reason_q = QString::fromUtf8(reason);
+
+    QTimer::singleShot(delay_ms, this, [this, reason_q]()
+    {
+        if (!startup_restore_pending_)
+            return;
+        OnDetectionRestore(reason_q.toUtf8().constData());
+    });
+}
+
+void WakePlugin::OnDetectionRestore(const char* reason)
+{
+    if (!startup_restore_pending_)
+        return;
+
+    ApplyTargets(reason);
+}
+
 void WakePlugin::ApplyStartup()
 {
-    if (ApplyTargets("startup"))
-    {
+    if (!startup_restore_pending_)
         return;
-    }
+
+    /* Always try — return value does NOT close the startup window */
+    ApplyTargets("startup");
 
     if (startup_retries_left_ > 0)
     {
@@ -404,8 +495,27 @@ void WakePlugin::ApplyStartup()
             ApplyStartup();
         });
     }
+    else
+    {
+        /* Retries exhausted; the ResourceManager callback can still
+           reapply during the remaining startup window time. */
+        Log("Startup: initial retries exhausted, "
+            "still watching ResourceManager events",
+            LOG_LEVEL_INFO);
+
+        /* Close the startup window after kStartupWindowMs total */
+        QTimer::singleShot(kStartupWindowMs, this, [this]()
+        {
+            startup_restore_pending_ = false;
+            startup_restore_scheduled_ = false;
+            Log("Startup restore window finished");
+        });
+    }
 }
 
+/*---------------------------------------------------------*\
+| Settings                                                  |
+\*---------------------------------------------------------*/
 void WakePlugin::LoadSettings()
 {
     if (!api_)
