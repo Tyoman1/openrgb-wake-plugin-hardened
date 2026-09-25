@@ -391,72 +391,97 @@ int main()
                devices[i].interface_number);
     }
 
-    /* 2. Pick the first device with interface 2 (battery interface) */
+    /* 2. Try all devices with interface 2 (battery interface) */
     int chosen = -1;
     for (size_t i = 0; i < devices.size(); i++)
     {
         if (devices[i].interface_number == TARGET_INTERFACE)
         {
-            chosen = (int)i;
-            break;
+            printf("\nTrying device [%zu]: PID 0x%04x (%s)  Interface %d\n",
+                   i, devices[i].pid,
+                   devices[i].is_wireless ? "Wireless/Dongle" : "Wired",
+                   devices[i].interface_number);
+
+            HANDLE h = OpenDevice(devices[i].path.c_str());
+            if (h == INVALID_HANDLE_VALUE)
+            {
+                DWORD err = GetLastError();
+                printf("  Cannot open (R+W): 0x%lx", err);
+                if (err == ERROR_ACCESS_DENIED)
+                {
+                    /* Try read-only */
+                    printf(" -> trying read-only...\n");
+                    h = CreateFileA(
+                        devices[i].path.c_str(),
+                        GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+                    if (h != INVALID_HANDLE_VALUE)
+                        printf("  Opened read-only.\n");
+                }
+                else
+                {
+                    printf("\n");
+                    continue;
+                }
+            }
+
+            if (h == INVALID_HANDLE_VALUE)
+            {
+                DWORD err = GetLastError();
+                printf("  Cannot open: 0x%lx", err);
+                if (err == ERROR_ACCESS_DENIED)
+                    printf(" (ACCESS_DENIED — Razer Synapse?)");
+                else if (err == ERROR_FILE_NOT_FOUND ||
+                         err == ERROR_DEVICE_NOT_CONNECTED)
+                    printf(" (device disconnected)");
+                printf("\n");
+                continue;
+            }
+
+            /* Opened successfully — try battery query */
+            printf("  Opened OK. Querying battery...\n");
+            int percent = 0;
+            bool charging = false;
+            bool charging_known = false;
+
+            if (QueryBattery(h, percent, charging, charging_known))
+            {
+                chosen = (int)i;
+                CloseHandle(h);
+
+                printf("\n=== RESULTS ===\n");
+                printf("Connection: %s\n",
+                       devices[chosen].pid == PID_WIRELESS ? "Wireless" : "Wired");
+                printf("Battery:    %d%%\n", percent);
+                if (charging_known)
+                    printf("Charging:   %s\n", charging ? "Yes" : "No");
+                else
+                    printf("Charging:   Unknown\n");
+                printf("Interface:  %d\n", devices[chosen].interface_number);
+                printf("PID:        0x%04x\n", devices[chosen].pid);
+                printf("Status:     OK\n");
+                break;
+            }
+            else
+            {
+                printf("  Battery query failed on this interface.\n");
+            }
+
+            CloseHandle(h);
         }
     }
 
     if (chosen < 0)
     {
-        /* Fallback: use any DeathAdder device (may not have battery interface) */
-        printf("\nWARNING: No device with interface %d found. Trying first device.\n",
+        printf("\nERROR: Could not read battery from any Interface %d device.\n",
                TARGET_INTERFACE);
-        chosen = 0;
-    }
-
-    printf("\nUsing device [%d]:\n", chosen);
-    printf("  Path:  %s\n", devices[chosen].path.c_str());
-    printf("  PID:   0x%04x\n", devices[chosen].pid);
-    printf("  Intf:  %d\n\n", devices[chosen].interface_number);
-
-    /* 3. Open device */
-    HANDLE h = OpenDevice(devices[chosen].path.c_str());
-    if (h == INVALID_HANDLE_VALUE)
-    {
-        printf("ERROR: Cannot open device (0x%lx)\n", GetLastError());
         printf("  Possible causes:\n");
-        printf("  - Razer Synapse is running (exclusive access)\n");
-        printf("  - Device is disconnected/sleeping\n");
-        printf("  - Access denied (run as admin?)\n");
+        printf("  - Razer Synapse is running (close from system tray)\n");
+        printf("  - Device is sleeping\n");
+        printf("  - Access denied (try running as Administrator)\n");
         return 1;
     }
-    printf("Device opened successfully.\n\n");
-
-    /* 4. Query battery */
-    printf("Querying battery...\n");
-    int percent = 0;
-    bool charging = false;
-    bool charging_known = false;
-
-    if (QueryBattery(h, percent, charging, charging_known))
-    {
-        printf("\n=== RESULTS ===\n");
-        printf("Connection: %s\n",
-               devices[chosen].interface_number == 2 ? "Wireless/Wired" : "Unknown");
-        printf("Battery:    %d%%\n", percent);
-        if (charging_known)
-            printf("Charging:   %s\n", charging ? "Yes" : "No");
-        else
-            printf("Charging:   Unknown\n");
-        printf("Interface:  %d\n", devices[chosen].interface_number);
-        printf("PID:        0x%04x\n", devices[chosen].pid);
-        printf("Status:     OK\n");
-    }
-    else
-    {
-        printf("\n=== RESULTS ===\n");
-        printf("Battery:    Unavailable\n");
-        printf("Status:     Query failed\n");
-    }
-
-    /* 5. Cleanup */
-    CloseHandle(h);
     printf("\nDone.\n");
     return 0;
 }
