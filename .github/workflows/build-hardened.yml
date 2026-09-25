@@ -403,20 +403,20 @@ jobs:
       - name: Build BatteryProbe (standalone test tool)
         shell: pwsh
         run: |
-          $cl = "$env:VS_PATH\VC\Tools\MSVC\14.4*\bin\Hostx64\x64\cl.exe"
-          $clPath = Resolve-Path $cl | Select-Object -ExpandProperty Path
-          Write-Host "Compiler: $clPath"
+          $cmake = "$env:VS_PATH\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+          $src = "tools/BatteryProbe"
+          $buildDir = "build/BatteryProbe"
 
-          $src = "tools/BatteryProbe/BatteryProbe.cpp"
-          $out = "build/Release/BatteryProbe.exe"
-
-          & $clPath /nologo /O2 /MT /std:c++17 /EHsc /Fe"$out" $src setupapi.lib hid.lib
+          New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+          & $cmake -S $src -B $buildDir -G "Visual Studio 17 2022" -A x64
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-          if (Test-Path $out) {
-            $size = (Get-Item $out).Length
-            Write-Host "✅ BatteryProbe.exe built: $size bytes"
-          }
+          & $cmake --build $buildDir --config Release
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+          Copy-Item "$buildDir/Release/BatteryProbe.exe" "build/Release/BatteryProbe.exe" -Force
+          $size = (Get-Item "build/Release/BatteryProbe.exe").Length
+          Write-Host "✅ BatteryProbe.exe built: $size bytes"
 
       # ── Upload artifact ────────────────────────────────
       - name: Upload artifact
