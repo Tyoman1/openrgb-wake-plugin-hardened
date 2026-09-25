@@ -399,25 +399,6 @@ jobs:
         run: |
           git archive --format=zip --output="build/Release/OpenRGBWakePlugin-1.3.2-hardened.1-source.zip" HEAD
 
-      # ── BatteryProbe build ────────────────────────────
-      - name: Build BatteryProbe (standalone test tool)
-        shell: pwsh
-        run: |
-          $cmake = "$env:VS_PATH\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-          $src = "tools/BatteryProbe"
-          $buildDir = "build/BatteryProbe"
-
-          New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
-          & $cmake -S $src -B $buildDir -G "Visual Studio 17 2022" -A x64
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-
-          & $cmake --build $buildDir --config Release
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-
-          Copy-Item "$buildDir/Release/BatteryProbe.exe" "build/Release/BatteryProbe.exe" -Force
-          $size = (Get-Item "build/Release/BatteryProbe.exe").Length
-          Write-Host "✅ BatteryProbe.exe built: $size bytes"
-
       # ── Upload artifact ────────────────────────────────
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -428,7 +409,6 @@ jobs:
             build/Release/OpenRGBWakePlugin.sha256.txt
             build/Release/BUILD_REPORT.md
             build/Release/OpenRGBWakePlugin-1.3.2-hardened.1-source.zip
-            build/Release/BatteryProbe.exe
 
       - name: Upload logs on failure
         if: failure()
